@@ -98,7 +98,9 @@ data Ter = Var Int
          | N | Z | S Ter | Rec Ter Ter Ter
          | Id Ter Ter Ter | Ref Ter
          | Trans Ter Ter Ter  -- Trans type eqprof proof
+         | Ext Ter Ter Ter Ter Ter -- Ext A B f g p (p : (Pi x:A) Id (Bx) (fx,gx))
          | Pi Ter Ter | Lam Ter | App Ter Ter
+--         | Sig Ter Ter | Pair Ter Ter | P Ter | Q Ter
   deriving (Show, Eq)
 
 data Val = VN | VZ | VS Val | VRec Val Val Val
@@ -106,8 +108,9 @@ data Val = VN | VZ | VS Val | VRec Val Val Val
          | VId Val Val Val      -- ??
          | Path Val             -- tag values which are paths
 --         | VTrans Val Val Val   -- ?? needed
-         | VPi Val Val
-         | VApp Val Val
+         | VExt Dim Val Val Val Val Val -- has dimension dim + gensym dim
+         | VPi Val Val | VApp Val Val
+--         | VSigma Ter Ter | Pair Ter Ter | Fst Ter | Snd Ter
          | Com Dim Val Box [Val]
          | Fill Dim Val Box [Val]   -- enough?
          | Res Val Mor
@@ -125,10 +128,6 @@ eval' _ _ Z       = VZ
 eval' d e (S t)   = VS (eval' d e t)
 eval' d e (Rec tz ts tn) = rec d (eval' d e tz) (eval' d e ts) (eval' d e tn)
 eval' d e (Id a a0 a1) = VId (eval' d e a) (eval' d e a0) (eval' d e a1)
-eval' d e (Ref a)   = Path $ res (eval' d e a) (deg d ((gensym d):d))
-eval' d e (Pi a b)  = VPi (eval' d e a) (eval' d e b)
-eval' d e (Lam t)   = Ter (Lam t) e -- stop at lambdas
-eval' d e (App r s) = app d (eval' d e r) (eval' d e s)
 eval' d e (Trans c p t) =
   case eval' d e p of
     Path pv -> com (x:d) (eval' (x:d) (pv:e') c) box [eval' d e t]
@@ -136,6 +135,13 @@ eval' d e (Trans c p t) =
   where x = gensym d
         e' = map (`res` (deg d (x:d))) e
         box = Box True x []
+eval' d e (Ref a)   = Path $ res (eval' d e a) (deg d ((gensym d):d))
+eval' d e (Pi a b)  = VPi (eval' d e a) (eval' d e b)
+eval' d e (Lam t)   = Ter (Lam t) e -- stop at lambdas
+eval' d e (App r s) = app d (eval' d e r) (eval' d e s)
+eval' d e (Ext a b f g p) = Path $ VExt d (eval' d e a) (eval' d e b)
+                            (eval' d e f) (eval' d e g) (eval' d e p)
+
 
 unPath :: Val -> Val
 unPath (Path v) = v
@@ -167,7 +173,7 @@ com d (VId a v0 v1) (Box dir i d') vs = -- should actually work (?)
 com d v b vs = Com d v b vs
 
 
--- Takes a u and returns an open box u's given by the specified faces.
+-- Takes a u and returns an open box us given by the specified faces.
 cubeToBox :: Val -> Dim -> Box -> [Val]
 cubeToBox u d (Box dir i d') = [ res u (face d j b) | (j,b) <- boxshape ]
   where boxshape = (i,dir) : zip dd' (cycle [True,False])
@@ -183,6 +189,27 @@ appBox d (Box _ i d') ws us =
 
 app :: Dim -> Val -> Val -> Val
 app d (Ter (Lam t) e) u = eval' d (u:e) t
+app d (VExt d' av bv fv gv pv) w =    -- d = x:d'
+  com (y:d) (app (y:d) bvxy d True y [x]) []
+  where x = gensym d'
+        y = gensym d
+        dg = deg d' (y:d')
+        avxy = res av (deg d' (y:d))
+        bvxy = res bv (deg d' (y:d))
+        wfill = fill (y:d) avxy (Box True y [x]) []
+        xtoy = update (identity d') [x] [y] -- (x=y):d->y:d'
+        wxtoy = res w xtoy
+        w0 = res w (face d x False)
+        w1 = res (face d x True)
+        w0y = res w0 ()
+        -- w1y = res w1 dg
+        fvy = res fv dg
+        gvy = res gv dg
+        fvxw0x = app (y:d') fvy w0y
+        gvxwy = app (y:d') gvy wxtoy
+        pvxw = app d pv w
+
+
 app d (Com bd (VPi a b) box@(Box dir i d') ws) u = -- here: bd = i:d
   com bd (app bd b ufill) box wus
   where ufill = fill bd a (Box (mirror dir) i []) [u]
