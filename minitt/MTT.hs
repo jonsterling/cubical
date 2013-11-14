@@ -2,6 +2,7 @@
 module MTT where
 
 import Control.Monad
+import Control.Trans.Reader
 import Debug.Trace
 import Test.QuickCheck
 
@@ -62,12 +63,18 @@ addC gam (a:as) nu (u:us) = addC (eval a nu:gam) as (Pair nu u) us
 -- An error monad
 type Error = Either String
 
+-- Type inference monad.
+type TypeInfer = ReaderT (Int,Env,[Exp]) Error
+
+runInfer :: Int -> Env -> [Exp] -> TypeInfer a -> Error a
+runInfer k rho gam x = runReader x (k,rho,gam)
+
 (=?=) :: Error Exp -> Exp -> Error ()
 m =?= s2 = do
   s1 <- m
   unless (s1 == s2) $ Left ("eqG " ++ show s1 ++ " =/= " ++ show s2)
 
-checkD :: Int -> Env -> [Exp] -> [Exp] -> [Exp] -> Error ()
+checkD :: [Exp] -> [Exp] -> TypeInfer ()
 checkD k rho gam es as = do
   (rho1,gam1,l) <- checkTs k rho gam as
   checks l rho1 gam1 as rho es
