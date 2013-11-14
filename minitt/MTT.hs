@@ -60,7 +60,7 @@ addC gam _      _  []     = gam
 addC gam (a:as) nu (u:us) = addC (eval a nu:gam) as (Pair nu u) us
 
 -- An error monad
-type Error a = Either String a
+type Error = Either String
 
 (=?=) :: Error Exp -> Exp -> Error ()
 m =?= s2 = do
@@ -71,20 +71,20 @@ checkD :: Int -> Env -> [Exp] -> [Exp] -> [Exp] -> Error ()
 checkD k rho gam es as = do
   (rho1,gam1,l) <- checkTs k rho gam as
   checks l rho1 gam1 as rho es
-  where
-    checkTs :: Int -> Env -> [Exp] -> [Exp] -> Error (Env,[Exp],Int)
-    checkTs k rho gam []     = return (rho,gam,k)
-    checkTs k rho gam (a:as) = do
-      checkT k rho gam a
-      checkTs (k+1) (Pair rho (Var k)) (eval a rho:gam) as
 
-    checkT :: Int -> Env -> [Exp] -> Exp -> Error ()
-    checkT k rho gam t = case t of
-      U            -> return ()
-      Pi a (Lam b) -> do
-        checkT k rho gam a
-        checkT (k+1) (Pair rho (Var k)) (eval a rho:gam) b
-      _ -> checkI k rho gam t =?= U
+checkTs :: Int -> Env -> [Exp] -> [Exp] -> Error (Env,[Exp],Int)
+checkTs k rho gam []     = return (rho,gam,k)
+checkTs k rho gam (a:as) = do
+  checkT k rho gam a
+  checkTs (k+1) (Pair rho (Var k)) (eval a rho:gam) as
+
+checkT :: Int -> Env -> [Exp] -> Exp -> Error ()
+checkT k rho gam t = case t of
+  U            -> return ()
+  Pi a (Lam b) -> do
+    checkT k rho gam a
+    checkT (k+1) (Pair rho (Var k)) (eval a rho:gam) b
+  _ -> checkI k rho gam t =?= U
 
 check  :: Int -> Env -> [Exp] -> Exp -> Exp -> Error ()
 check k rho gam a t = case (a,t) of
@@ -107,24 +107,24 @@ check k rho gam a t = case (a,t) of
     let rho1 = PDef es as rho
     check k rho1 (addC gam as rho (evals es rho1)) a e
   _ -> checkI k rho gam t =?= a
-  where
-    checkTUs :: Int -> Env -> [Exp] -> [Exp] -> Error ()
-    checkTUs _ _   _   []     = return ()
-    checkTUs k rho gam (a:as) = do
-      check k rho gam U a
-      checkTUs (k+1) (Pair rho (Var k)) (eval a rho:gam) as
 
-    -- What does this do?
-    fix k rho gam as nu f c e = do
-      let l  = length as
-      let us = map Var [k..k+l-1]
-      check (k+l) (upds rho us) (addC gam as nu us) (app f (Con c us)) e
+checkTUs :: Int -> Env -> [Exp] -> [Exp] -> Error ()
+checkTUs _ _   _   []     = return ()
+checkTUs k rho gam (a:as) = do
+  check k rho gam U a
+  checkTUs (k+1) (Pair rho (Var k)) (eval a rho:gam) as
 
-    extSG :: String -> Exp -> Error ([Exp], Env)
-    extSG c (Comp (Sum cas) r) = case lookup c cas of
-      Just as -> return (as,r)
-      Nothing -> Left ("extSG " ++ show c)
-    extSG c u = Left ("extSG " ++ c ++ " " ++ show u)
+-- What does this do?
+fix k rho gam as nu f c e = do
+  let l  = length as
+  let us = map Var [k..k+l-1]
+  check (k+l) (upds rho us) (addC gam as nu us) (app f (Con c us)) e
+
+extSG :: String -> Exp -> Error ([Exp], Env)
+extSG c (Comp (Sum cas) r) = case lookup c cas of
+  Just as -> return (as,r)
+  Nothing -> Left ("extSG " ++ show c)
+extSG c u = Left ("extSG " ++ c ++ " " ++ show u)
 
 checkI :: Int -> Env -> [Exp] -> Exp -> Error Exp
 checkI k rho gam e = case e of
@@ -151,4 +151,4 @@ checks k rho gam _ _ _ = Left "checks"
 
 
 checkExp :: Exp -> Error ()
-checkExp = check 0 Empty [] Top 
+checkExp = check 0 Empty [] Top
