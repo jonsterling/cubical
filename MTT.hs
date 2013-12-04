@@ -212,5 +212,3 @@ reifyEnv k (PDef ts as r) = reifyEnv k r
 -- reifyEnv _ Empty = []
 -- reifyEnv k (Pair r u) = reifyExp k u:reifyEnv k r
 -- reifyEnv k (PDef ts as r) = reifyEnv k r
-
-

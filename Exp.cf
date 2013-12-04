@@ -3,15 +3,16 @@ comment "{-" "-}" ;
 
 layout "where", "let", "of", "split", "primitive" ;
 layout stop "in" ;
---layout toplevel ;
+layout toplevel ;
 
 Module.  Module ::= [Def] ;
-ModEval. Module ::= "eval" Exp "where" "{" [Def] "}" ;
 
-Def.      Def ::= AIdent [Arg] "=" ExpWhere ;
-DefTDecl. Def ::= AIdent ":" Exp ;
-DefData.  Def ::= "data" AIdent Tele "=" [Sum] ;
-DefPrim.  Def ::= "primitive" "{" [Def] "}" ; -- only allows TDecls
+Def.       Def ::= AIdent [Arg] "=" ExpWhere ;
+DefTDecl.  Def ::= AIdent ":" Exp ;
+DefData.   Def ::= "data" AIdent Tele "=" [Sum] ;
+DefPrim.   Def ::= "primitive" "{" [Def] "}" ; -- only allows TDecls
+DefImport. Def ::= "import" ImportIdent ;
+
 separator Def ";" ;
 
 Where.   ExpWhere  ::= Exp "where" "{" [Def] "}" ;
@@ -32,7 +33,6 @@ Var.    Exp3 ::= Binder ;     -- check for "_". this also lead to s/r conflicts
 U.      Exp3 ::= "U" ;
 PN.     Exp2 ::= "PN" AIdent Exp3 ;
 internal Top. Exp3 ::= "Top" ;
-
 
 terminator Exp3 "" ;
 coercions Exp 3 ;
@@ -67,3 +67,5 @@ terminator nonempty VDeclNE "" ;
 
 position token AIdent (letter(letter|digit|'\'')*) ;
 terminator AIdent "" ;
+
+token ImportIdent (letter(letter|digit|'\''|'\\'|'/')*) ;
