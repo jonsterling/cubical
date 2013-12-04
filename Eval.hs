@@ -565,7 +565,7 @@ res :: Val -> Mor -> Val
 res VU _ = VU
 res (VId v v0 v1) f = VId (res v f) (res v0 f) (res v1 f)
 -- Cyril: because of this treatment of Path, res of deg cannot be identity!!
---        This could be fixed Path embeds the dimensions as well.
+--        This could be fixed if Path embeds the dimensions as well.
 res (Path v) f = Path $ res v (update f (gensym $ dom f) (gensym $ cod f))
 res (VPi a b) f = VPi (res a f) (res b f)
 -- res (Ter t e) f = eval (cod f) (mapEnv (`res` f) e) t
@@ -579,7 +579,6 @@ res (Kan Fill d u shape@(BoxShape (i,dir) d') bc) f | (f `ap` i) `direq` dir =
 --  com (cod f) (res u f) (resShape shape f) (resBox i d' bc f) -- (f `minus` i))
 res (Kan Fill d u bs@(BoxShape (i,dir) d') bc) f | ndef f /= [] =
   res v (f `minus` x)
-  -- TODO: CLEAN!
   where x:_ = ndef f
         Left dirx  = f `ap` x
         v   = boxSide bs bc (x, dir)
