@@ -106,16 +106,12 @@ data BoxContent = BoxContent {
   }
   deriving (Eq,Show)
 
-boxSide :: BoxContent -> Int -> Dir -> Val
-boxSide (BoxContent _ vs) n Down = fst $ vs !! n
-boxSide (BoxContent _ vs) n Up   = snd $ vs !! n
-
-lookSide :: BoxShape -> BoxContent -> Name -> Dir -> Val
-lookSide (BoxShape bdir bx bdim) (BoxContent b vs) x dir
+boxSide :: BoxShape -> BoxContent -> Name -> Dir -> Val
+boxSide (BoxShape bdir bx bdim) (BoxContent b vs) x dir
   | x == bx && mirror bdir == dir = b
   | otherwise = case findIndex (x ==) bdim of
     Just n  -> side $ vs !! n
-    Nothing -> error "lookSide"
+    Nothing -> error "boxSide"
   where side = if dir == Up then snd else fst
 
 -- assumes the list is of odd size
@@ -369,14 +365,14 @@ fill d (VEquivEq x d' a b f s t) bs@(BoxShape dir z dJ) bc@(BoxContent vz vJ)
                    (BoxShape dir z (x : dJ)) (BoxContent bz ((bx0,bx1) : bJ))
     in trace "VEquivEq case 1" $ VPair x ax0 v
   | x /= z && x `elem` dJ =
-    let ax0 = lookSide bs bc x Down
+    let ax0 = boxSide bs bc x Down
         -- TODO: Clean
         bz  = modBox z dir dJ bc (\ny dy vy -> if x /= ny then sndVal vy else
                                                  if dy == Down then app d' f ax0 else vy)
         v   = fill d (b `res` deg d' d) bs bz
     in trace "VEquivEq case 2" $ VPair x ax0 v
   | x == z && dir == Up =
-    let ax0 = lookSide bs bc x Down
+    let ax0 = boxSide bs bc x Down
         bx0 = app d' f ax0
         bJ  = map (\(x,y) -> (sndVal x,sndVal y)) vJ
         -- TODO: Add a layer of abstraction for that
@@ -580,16 +576,12 @@ res (Kan Fill d u (BoxShape dir i d') (BoxContent v _)) f | (f `ap` i) `direq` m
 res (Kan Fill d u shape@(BoxShape dir i d') bc) f | (f `ap` i) `direq` dir =
   res (Kan Com d u shape bc) (f `minus` i) -- This will be a Com
 --  com (cod f) (res u f) (resShape shape f) (resBox i d' bc f) -- (f `minus` i))
-res (Kan Fill d u (BoxShape dir i d') bc) f | isJust cand =
-  res v (f `minus` j)
+res (Kan Fill d u bs@(BoxShape dir i d') bc) f | ndef f /= [] =
+  res v (f `minus` x)
   -- TODO: CLEAN!
-  where cand      = findIndex (\j -> j `elem` ndef f) d'
-        n         = fromJust cand
-        j         = d' !! n
-        -- cand = findName (\j -> j `elem` ndef f) d'
-        -- j = fromJust cand
-        Left dir  = f `ap` j
-        v         = boxSide bc n dir
+  where x:_ = ndef f
+        Left dirx  = f `ap` x
+        v   = boxSide bs bc x dir 
 res (Kan Fill d u shape@(BoxShape dir i d') bc) f | (i:d') `subset` def f = -- otherwise?
   fill (cod f) (res u f)
        (resShape shape f)
@@ -598,14 +590,12 @@ res (Kan Fill d u shape@(BoxShape dir i d') bc) f | (i:d') `subset` def f = -- o
 res (Kan Fill d u (BoxShape dir i d') vs) f = error $ "Fill: not possible? i="
                                               ++ show i ++ "d' = " ++ show d'
                                               ++ "f = " ++ show f ++ " d= " ++ show d
-res (Kan Com d u (BoxShape dir i d') bc) f | isJust cand =
-  res v (g `minus` j)
-  where cand = findIndex (\j -> j `elem` ndef f) d'
-        n         = fromJust cand
-        j         = d' !! n
-        Left dir  = f `ap` j
-        v         = boxSide bc n dir -- dim. d-j
-        g         = face d i dir `comp` f
+res (Kan Com d u bs@(BoxShape dir i d') bc) f | ndef f /= [] =
+  res v (g `minus` x)
+  where x:_ = ndef f
+        Left dirx  = f `ap` x
+        v   = boxSide bs bc x dir
+        g   = face d i dir `comp` f
 res (Kan Com d u shape@(BoxShape dir i d') bc) f | d' `subset` def f =
   com co (res u fupd) (resShape shape fupd) (resBox i d' bc fupd)
   where co = cod f
