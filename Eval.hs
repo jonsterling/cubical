@@ -25,6 +25,9 @@ gensym :: Dim -> Name
 gensym [] = 0
 gensym xs = maximum xs + 1
 
+gensyms :: Dim -> [Name]
+gensyms d = x : (gensyms (x : d)) where x = gensym d
+
 -- all *very* hackish
 type Mor = ([(Name, Either Dir Name)], Dim)
 -- I -> J u {0,1}
@@ -47,6 +50,10 @@ ndef (al, _)  = [ i | (i, Left _) <- al ]
 -- update f x y is (f, x=y) (x and y fresh)
 update :: Mor -> Name -> Name -> Mor
 update (al,co) x y = ((x,Right y):al, y:co)
+
+-- rename x to y in v. assumes x and y are fresh to d.
+rename :: Dim -> Val -> Name -> Name -> Val
+rename d v x y = v `res` update (identity d) x y
 
 im :: Mor -> Dim
 im (al, _) = [ y | (_, Right y) <- al ]
@@ -108,9 +115,9 @@ lookSide (BoxShape bdir bx bdim) (BoxContent b vs) x dir
   | x == bx && mirror bdir == dir = b
   | otherwise = case findIndex (x ==) bdim of
     Just n  -> side $ vs !! n
-    Nothing -> error "lookSide" 
+    Nothing -> error "lookSide"
   where side = if dir == Up then snd else fst
-        
+
 -- assumes the list is of odd size
 toBox :: [Val] -> BoxContent
 toBox (v:vs) = BoxContent v (pairing vs)
@@ -148,7 +155,7 @@ data Val = VU
          | VEquivEq Name Dim Val Val Val Val Val -- of type U of dimension name:dim
            -- VEquivEq x d a b f s t where
          | VPair Name Val Val -- of type VEquiv
-           
+
 --         | VInhRec Dim Val Val Val Val -- not needed for closed terms
 
 --         | Res Val Mor              -- not needed for closed terms
@@ -163,6 +170,19 @@ fstVal (VPair _ a _) = a
 fstVal x             = error $ "fstVal: " ++ show x
 sndVal (VPair _ _ v) = v
 sndVal x             = error $ "fstVal: " ++ show x
+
+-- assumes x is not in d
+pathWith :: Dim -> Name -> Val -> Val
+pathWith d x v = Path $ rename d v x (gensym d)
+
+unPath :: Val -> Val
+unPath (Path v) = v
+unPath v        = error $ "unPath: " ++ show v
+
+-- assumes x is not in d and v is a path
+unPathAs :: Dim -> Name -> Val -> Val
+unPathAs d x (Path v) = rename d v (gensym d) x
+unPathAs _ _ v        = error $ "unPath: " ++ show v
 
 data Env = Empty
          | Pair Env Val
@@ -218,11 +238,8 @@ eval d e (J a u c w v p) = case eval d e p of
     --trace ("J: A: " ++ show (eval dxy exy a) ++ "\n theta:" ++ show theta ++"\n omega: " ++ show omega)
                com dy (app dy (app dy cv omega) sigma) shape valbox
     where
-      x = gensym d
-      y = gensym (x:d)
-      dy = y:d
-      z = gensym dy             -- TODO: do we really need z? Can't we
-                                -- just 'com' along x?
+      x:y:_ = gensyms d      -- pv is in x:d
+      dy = y:d               -- Cyril: no need for z thanks to pathWith
       dxy = y:x:d
       uv = eval d e u
       ux = uv `res` deg d (x:d)
@@ -231,21 +248,17 @@ eval d e (J a u c w v p) = case eval d e p of
       ey = mapEnv (`res` deg d dy) e
       theta = fill dxy (eval dxy exy a)
               (BoxShape Up x [y]) (BoxContent uy [(ux,pv)]) -- y:x:d
-      thetaxtoz = theta `res` update (identity dy) x z        -- z:y:d
-      sigma = Path thetaxtoz                              -- y:d
+      sigma = pathWith dy x theta                       -- y:d
       omega = theta `res` face dxy x Up                 -- y:d
       cv = eval dy ey c                                   -- y:d
       shape = BoxShape Up y []
       valbox = BoxContent (eval d e w) []
   pv -> error $ "eval: J on a non path value:" ++ show pv
 
-eval d e (JEq a u c w) = Path $ filled `res` update (identity d) y x
+eval d e (JEq a u c w) = pathWith d y filled
   where
-    x = gensym d
-    y = gensym (x:d)
+    x:y:_ = gensyms d
     dy = y:d
-    z = gensym (y:d)          -- TODO: do we really need z? Can't we
-                              -- just 'com' along x?
     dxy = y:x:d
     exy = mapEnv (`res` deg d dxy) e
     ey = mapEnv (`res` deg d dy) e
@@ -254,8 +267,7 @@ eval d e (JEq a u c w) = Path $ filled `res` update (identity d) y x
     uy = uv `res` deg d dy
     theta = fill dxy (eval dxy exy a)
             (BoxShape Up x [y]) (BoxContent uy [(ux,ux)])
-    thetaxtoz = theta `res` update (identity dy) x z
-    sigma = Path thetaxtoz
+    sigma = pathWith dy x theta
     omega = theta `res` face dxy x Up
     cv = eval dy ey c
     shape = BoxShape Up y []
@@ -305,14 +317,10 @@ inhrec d' b p phi (VSquash x d a0 a1) = -- dim. of b,p,phi is x:d
         b1 = inhrec d (fc b Up) (fc p Up) (fc phi Up) a1
 --        d' = delete x d
 inhrec _ b p phi (Kan ktype d (VInh a) box@(BoxShape dir i d') bc) =
-  kan ktype d b box (modBox dir i d' bc irec)
-  where  irec dir j v = inhrec (delete j d) (fc b) (fc p) (fc phi) v
+  kan ktype d b box (modBox i dir d' bc irec)
+  where  irec j dir v = inhrec (delete j d) (fc b) (fc p) (fc phi) v
            where fc v = res v (face d j dir)
 --inhrec b p phi a = VInhRec b p phi a
-
-unPath :: Val -> Val
-unPath (Path v) = v
-unPath v        = error $ "unPath: " ++ show v
 
 kan :: KanType -> Dim -> Val -> BoxShape -> BoxContent -> Val
 kan Fill = fill
@@ -326,10 +334,8 @@ fill d (VId a v0 v1) box@(BoxShape dir i d') bc =
     Path $ fill (x:d) ax (BoxShape dir i (x:d')) (BoxContent vx ((v0, v1):vsx))
   where x   = gensym d            -- i,d' <= d
         ax  = a `res` (deg d (x:d)) -- dim x:d
-        BoxContent vx vsx = modBox Up i d' bc
-                    (\_ j v -> let dj = delete j d
-                                   f  = update (identity dj) (gensym dj) x
-                             in unPath v `res` f)
+        BoxContent vx vsx = modBox i Up d' bc
+                    (\j _ v -> unPathAs (delete j d) x v)
 fill d (Ter (LSum nass) e) box bcv = -- assumes cvs are constructor vals
 --  trace ("fill sum")
   VCon name ws
@@ -351,13 +357,13 @@ fill d (Ter (LSum nass) e) box bcv = -- assumes cvs are constructor vals
     -- fill boxes for each argument position of the constructor
     ws = fills d as e box argboxes
     err x = error $ "fill: not applied to constructor expressions " ++ show x
-fill d (VEquivEq x d' a b f s t) bs@(BoxShape dir z dJ) bc@(BoxContent vz vJ) 
+fill d (VEquivEq x d' a b f s t) bs@(BoxShape dir z dJ) bc@(BoxContent vz vJ)
   | x /= z && x `notElem` dJ =
     -- d == x : d' ?!
-    let ax0  = fill d' a bs (modBox dir z dJ bc (\dy ny vy -> fstVal vy))
+    let ax0  = fill d' a bs (modBox z dir dJ bc (\dy ny vy -> fstVal vy))
         bx0  = app d' f ax0
-        bcx1 = modBox dir z dJ bc (\dy ny vy -> sndVal vy `res` face d x Up)
-        BoxContent bz bJ = modBox dir z dJ bc (\dy ny vy -> sndVal vy)
+        bcx1 = modBox z dir dJ bc (\dy ny vy -> sndVal vy `res` face d x Up)
+        BoxContent bz bJ = modBox z dir dJ bc (\dy ny vy -> sndVal vy)
         bx1  = fill d' b bs bcx1
         v    = fill d (b `res` deg d' d)
                    (BoxShape dir z (x : dJ)) (BoxContent bz ((bx0,bx1) : bJ))
@@ -365,7 +371,7 @@ fill d (VEquivEq x d' a b f s t) bs@(BoxShape dir z dJ) bc@(BoxContent vz vJ)
   | x /= z && x `elem` dJ =
     let ax0 = lookSide bs bc x Down
         -- TODO: Clean
-        bz  = modBox dir z dJ bc (\dy ny vy -> if x /= ny then sndVal vy else
+        bz  = modBox z dir dJ bc (\ny dy vy -> if x /= ny then sndVal vy else
                                                  if dy == Down then app d' f ax0 else vy)
         v   = fill d (b `res` deg d' d) bs bz
     in trace "VEquivEq case 2" $ VPair x ax0 v
@@ -374,7 +380,7 @@ fill d (VEquivEq x d' a b f s t) bs@(BoxShape dir z dJ) bc@(BoxContent vz vJ)
         bx0 = app d' f ax0
         bJ  = map (\(x,y) -> (sndVal x,sndVal y)) vJ
         -- TODO: Add a layer of abstraction for that
-        v   = fill d (b `res` deg d' d) bs (BoxContent bx0 bJ) 
+        v   = fill d (b `res` deg d' d) bs (BoxContent bx0 bJ)
     in trace "VEquivEq case 3" $ VPair x ax0 v
   | x == z && dir == Down =
     let y  = gensym d
@@ -382,44 +388,37 @@ fill d (VEquivEq x d' a b f s t) bs@(BoxShape dir z dJ) bc@(BoxContent vz vJ)
         sb = app d' s b
         gb = vfst sb
         BoundaryContent abnd = modBoundary d' (BoundaryContent vJ)
-                                 (\dz nz vz -> fst (vpairToSquare dz nz vz))
+                                 (\nz dz vz -> fst (vpairToSquare nz dz vz))
 
         BoundaryContent bbnd = modBoundary d' (BoundaryContent vJ)
-                                 (\dz nz vz -> snd (vpairToSquare dz nz vz))                               
+                                 (\nz dz vz -> snd (vpairToSquare nz dz vz))
         aboxshape = BoxShape Up y d'
         abox  = BoxContent gb abnd
         afill = fill (y:d') (a `res` deg d' (y : d')) aboxshape abox
         acom  = com (y:d') (a `res` deg d' (y : d')) aboxshape abox
         fafill = app (y : d') (f `res` deg d' (y : d')) afill
-        sbsnd = rename d' (unPath (vsnd sb)) (gensym d') x
+        sbsnd = unPathAs d' x (vsnd sb)
         degb  = b `res` deg d' (y : d')
 
         bboxshape = BoxShape Up y (x:d')
         bbox = BoxContent sbsnd ((fafill,degb) : bbnd)
         bcom = com (y : d) (b `res` deg d' (y : d)) bboxshape bbox
-        -- TODO: Introduce pathWith?
+
         vpairToSigma :: Name -> Val -> Val
         vpairToSigma z (VPair _ a0 v0) =
-          VCon "pair" [a0,Path $ rename (delete z d) v0 x (gensym (delete z d'))]
-        -- TODO: Permute name and dir  
-        vpairToSquare :: Dir -> Name -> Val -> (Val,Val)
-        vpairToSquare dir z vp@(VPair _ a0 v0) =
+          VCon "pair" [a0, pathWith (delete z d') x v0]
+        -- TODO: Permute name and dir
+        vpairToSquare :: Name -> Dir -> Val -> (Val,Val)
+        vpairToSquare z dir vp@(VPair _ a0 v0) =
           let t0   = t `res` face d' z dir
               b0   = b `res` face d' z dir
               d'z  = delete z d'
-              gd'z = gensym d'z
-              d''  = gd'z : d'z
-              gd'' = gensym d''
-              -- TODO: Write unPathAs and pathWith
-              VCon "pair" [l0,sq0] =
-                unPath $ app d'z (app d'z t0 b0) (vpairToSigma z vp)
-              l0'  = rename d'z l0 (gensym d'z) y
-              (fstsq0,sndsq0) = (vfst sq0,unPath $ vsnd sq0)
-          in (rename d'z fstsq0 gd'z x,
-              rename d'' (rename d'z sndsq0 gd'z x) gd'' y)
-        
+              VCon "pair" [l0,sq0] = -- in x : d'z
+                unPathAs d'z x $ app d'z (app d'z t0 b0) (vpairToSigma z vp)
+          in (vfst sq0, unPathAs (x:d'z) y $ vsnd sq0)
+
     in trace "VEquivEq case 4" $ VPair x acom bcom
-  | otherwise = error "fill EqEquiv"    
+  | otherwise = error "fill EqEquiv"
 fill d v b vs = Kan Fill d v b vs
 
 
@@ -431,13 +430,13 @@ fill d v b vs = Kan Fill d v b vs
 
 -- fillBoundary :: Dim -> Val -> Val -> Val -> Val -> Val -> BoundaryShape -> BoundaryContent -> Val
 -- fillBoundary d b c s t u bs@(BoundaryShape d') bc@(BoundaryContent vs) =
--- fill d (VEquivEq x d' a b f s t) bs@(BoxShape dir z dJ) bc@(BoxContent vz vJ) 
+-- fill d (VEquivEq x d' a b f s t) bs@(BoxShape dir z dJ) bc@(BoxContent vz vJ)
 
 
 -- is this sigma?
 vsigma :: Val -> Val -> Val
 vsigma a b =
-  Ter (LSum [("pair",[Var 1,App (Var 1) (Var 0)])]) (Pair (Pair Empty a) b) 
+  Ter (LSum [("pair",[Var 1,App (Var 1) (Var 0)])]) (Pair (Pair Empty a) b)
 
 vpair :: Val -> Val -> Val
 vpair a b = VCon "pair" [a,b]
@@ -467,7 +466,7 @@ com d (VId a v0 v1) box@(BoxShape dir i d') bc =
     -- face d i dir is (i=dir): d -> d-i
 com d (Ter (LSum nass) e) (BoxShape dir i d') bc =
   res (fill d (Ter (LSum nass) e) (BoxShape dir i d') bc) (face d i dir)
--- com d (VEquivEq x d a b f s t) bs@(BoxShape dir z dJ) bc@(BoxContent vz vJ) 
+-- com d (VEquivEq x d a b f s t) bs@(BoxShape dir z dJ) bc@(BoxContent vz vJ)
 --   | x /= z && x `notElem` dJ =
 --     let ax0  = fill d a bs (modBox dir z dJ bc (\dy ny vy -> fstVal vy))
 --         bx0  = app d f ax0
@@ -479,7 +478,7 @@ com d (Ter (LSum nass) e) (BoxShape dir i d') bc =
 --     in VPair x ax0 v
 com d (VEquivEq x d' a b f s t) bs@(BoxShape dir z dJ) bc =
   fill d (VEquivEq x d' a b f s t) bs bc `res` face d z dir
-    
+
 com d v b bc = Kan Com d v b bc
 
 
@@ -528,6 +527,8 @@ app d (VExt x d' bv fv gv pv) w = -- d = x:d'; values in vext have dim d'
         wxtoy = res w (update (identity d') x y)
         right = app (y:d') (res gv dg) wxtoy
         pvxw = unPath $ app d' pv w0
+               -- Cyril: this assumes x = gensym d'
+               -- unPathAs d' x $ ... would be safer
 -- app d (VBranch alts e) (VCon name us) =
 --   case lookup name alts of
 --     Just t -> eval d (reverse us ++ e) t
@@ -562,9 +563,12 @@ prop_resId v f = res v (identity (cod f)) == v
 -- findName f (x:xs) | f x = Just x
 -- findName f (_:xs) | otherwise = findName f xs
 
+
 res :: Val -> Mor -> Val
 res VU _ = VU
 res (VId v v0 v1) f = VId (res v f) (res v0 f) (res v1 f)
+-- Cyril: because of this treatment of Path, res of deg cannot be identity!!
+--        This could be fixed Path embeds the dimensions as well.
 res (Path v) f = Path $ res v (update f (gensym $ dom f) (gensym $ cod f))
 res (VPi a b) f = VPi (res a f) (res b f)
 -- res (Ter t e) f = eval (cod f) (mapEnv (`res` f) e) t
@@ -679,16 +683,16 @@ appBox d (BoxShape _ i d') (BoxContent w ws) (BoxContent u us) =
                          | ((w1, w2), (u1, u2), j) <- zip3 ws us d']
   where get j = app (delete j d)
 
-modBox :: Dir -> Name -> Dim -> BoxContent -> (Dir -> Name -> Val -> Val) -> BoxContent
-modBox dir i d (BoxContent v vs) f =
-  BoxContent (f dir i v) (zipWith (\j (v, w) -> (f Down j v, f Up j w)) d vs)
+modBox :: Name -> Dir -> Dim -> BoxContent -> (Name -> Dir -> Val -> Val) -> BoxContent
+modBox i dir d (BoxContent v vs) f =
+  BoxContent (f i dir v) (zipWith (\j (v, w) -> (f j Down v, f j Up w)) d vs)
 
 -- (box i d vs) f
 -- i  = what we fill along
 -- d  = dimension
 -- vs = open box
 resBox :: Name -> Dim -> BoxContent -> Mor -> BoxContent
-resBox i d bc f = modBox Up i d bc (\_ j v -> res v (f `minus` j))
+resBox i d bc f = modBox i Up d bc (\j _ v -> res v (f `minus` j))
 
 -- assumes f is defined on i:d'
 resShape :: BoxShape -> Mor -> BoxShape
@@ -714,12 +718,7 @@ fillBoundary d a b s t u bs@(BoundaryShape d') bc@(BoundaryContent vs) =
         tbnd = cubeToBoundary t d bs
         tbc  = appBoundary d bs tbnd bc
         BoundaryContent rest = modBoundary d' tbc
-                                (\ _ n v -> let nd = delete n d in
-                                  rename nd (unPath v) (gensym nd) x)
-
--- rename x to y in v. assumes x and y are fresh to d.
-rename :: Dim -> Val -> Name -> Name -> Val
-rename d v x y = v `res` update (identity d) x y
+                                (\ n _ v -> unPathAs (delete n d) x v)
 
 -- fillBoundary :: Dim -> Val -> Val -> Val -> Val -> Val -> BoundaryShape -> BoundaryContent -> Val
 -- fillBoundary d a b s t u bs@(BoundaryShape d') bc@(BoundaryContent vs) =
@@ -774,12 +773,12 @@ appBoundary d (BoundaryShape d') (BoundaryContent ws) (BoundaryContent us) =
                   | ((w1, w2), (u1, u2), j) <- zip3 ws us d']
   where get j = app (delete j d)
 
-modBoundary :: Dim -> BoundaryContent -> (Dir -> Name -> Val -> Val) -> BoundaryContent
+modBoundary :: Dim -> BoundaryContent -> (Name -> Dir -> Val -> Val) -> BoundaryContent
 modBoundary d (BoundaryContent vs) f =
-  BoundaryContent (zipWith (\j (v, w) -> (f Down j v, f Up j w)) d vs)
+  BoundaryContent (zipWith (\j (v, w) -> (f j Down v, f j Up w)) d vs)
 
 resBoundary :: Dim -> BoundaryContent -> Mor -> BoundaryContent
-resBoundary d bc f = modBoundary d bc (\_ j v -> res v (f `minus` j))
+resBoundary d bc f = modBoundary d bc (\j _ v -> res v (f `minus` j))
 
 -- assumes f is defined on d'
 resBoundaryShape :: BoundaryShape -> Mor -> BoundaryShape
