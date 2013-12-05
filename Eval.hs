@@ -7,25 +7,10 @@ import Control.Applicative ((<$>))
 import Data.List
 import Data.Either
 import Data.Maybe
-
+import Box
 import Debug.Trace
 
 import Core
-
-type Name = Integer
-type Dim  = [Name]
-data Dir  = Up | Down deriving (Eq, Show)
-type Side = (Name, Dir)
-
-sides :: Dim -> [Side]
-sides d = concat [[(x,Up), (x,Down)] | x <- d]
-
-mirror :: Dir -> Dir
-mirror Up = Down
-mirror Down = Up
-
-oppSide :: Side -> Side
-oppSide (x, dir) = (x, mirror dir)
 
 dimeq :: Dim -> Dim -> Bool
 dimeq d d' = sort (nub d) == sort (nub d')
@@ -630,73 +615,15 @@ res p f = error $ "res: " ++ show p ++ " " ++ show f
 subset       :: Eq a => [a] -> [a] -> Bool
 subset xs ys = all (`elem` ys) xs
 
-{- New Boxing -}
-data Box t = Box {
-   boxSingleSide :: Maybe Side,
-   boxDim        :: Dim,
-   boxMap        :: [(Side, t)]
-}
-  deriving (Eq, Show)
-
-mapBox :: (Side -> t -> t) -> Box t -> Box t
-mapBox f (Box ms d' vs) = Box ms d' fvs
-    where fvs = [(s, f s v) | (s@(x,_), v) <- vs]
-
-boxSide :: Box t -> Side -> t
-boxSide (Box s0 d vs) s@(x,dir) =
-  case lookup s vs of
-    Just v -> v
-    Nothing -> if x `elem` d
-                 then error $ "boxSide: missing expected side " ++ show s
-               else if Just s == s0
-                 then error $ "boxSide: missing single side " ++ show s
-               else error $ "boxSide: side not expected " ++ show s
-
-boxSides :: Box t -> [Side]
-boxSides box@(Box s d _) =
-  (case s of Just s -> [s]; Nothing -> []) ++ sides d
-
-isOpenBox :: Box t -> Bool
-isOpenBox (Box (Just _) _ _) = True
-isOpenBox _                  = False
-
-
-openBox :: Show t => Side -> Box t -> Box t
-openBox s0@(x,dx) (Box Nothing d vs)
-    | x `elem` d = Box (Just (oppSide s0)) (delete x d) vs'
-    | otherwise  = error $ "openBox t: " ++ show x ++ " not in " ++ show d
-  where vs' = [(s,v) | (s,v) <- vs, s /= s0]
-openBox _ (Box (Just s) _ _) =
-    error $ "openBox t : already open on side " ++ show s
-
-boundaryBox :: Show t => Box t -> Box t
-boundaryBox (Box (Just _) d vs) = Box Nothing d vs
-boundaryBox b = error $ "openBox t : already a boundary " ++ show b
-
-
--- TODO: rewrite mkBox using addBox t or funMkBox
-mkBox :: Maybe (Side,t) -> [(Name, (t, t))] -> Box t
-mkBox sv xvvs = Box s0 d (sv0 ++ concat vvs) where
-    (s0, sv0) = case sv of Just (s, v) -> (Just s, [(s, v)])
-                           Nothing     -> (Nothing, [])
-    d         = map fst xvvs
-    vvs       = [ [((x,Down),vDown), ((x,Up),vUp)]
-                | (x, (vDown, vUp)) <- xvvs]
-
-addBox :: Box t -> (Name,(t, t)) -> Box t
-addBox (Box s0 d vs) (x,(vDown,vUp)) =
-    Box s0 (x:d) (((x,Down),vDown):((x,Up),vUp):vs)
-
-funMkBox :: Maybe Side -> Dim -> (Side -> t) -> Box t
-funMkBox s d f = Box s d [(s, f s) | s <- ss] where
-  ss = (case s of Just s -> [s]
-                  Nothing -> []) ++ (sides d)
-
-addSingleSide :: Show t => (Side, t) -> Box t -> Box t
-addSingleSide (s, v) (Box Nothing d vs) = (Box (Just s) d ((s,v):vs))
-addSingleSide _ b = error $ "addSingleSide: not boundary " ++ show b
-
 type VBox = Box Val
+
+appBox :: Dim -> VBox -> VBox -> VBox
+appBox d b0@(Box s0 d0 vs0) b1@(Box s1 d1 vs1) = Box s2 d2 vs2
+    where s2     = if s0 == s1 then s0 else error msg_sf
+          msg_sf = "appBox: incompatible single faces" ++ show (s0, s1)
+          d2     = intersect d0 d1
+          vs2    = [(s, app (delete x d) (boxSide b0 s) (boxSide b1 s))
+                   | s@(x,dx) <- sides d2]
 
 -- assumes s0 and d are in dom f
 resBox :: VBox -> Mor -> VBox
@@ -715,15 +642,3 @@ toBox d d' v = Box Nothing d' [(s, v `res` face d s) | s <- sides d']
 toOpenBox :: Dim -> Dim -> Side -> Val -> VBox
 toOpenBox d d' s = openBox s . toBox d d'
 
-appBox :: Dim -> VBox -> VBox -> VBox
-appBox d b0@(Box s0 d0 vs0) b1@(Box s1 d1 vs1) = Box s2 d2 vs2
-    where s2     = if s0 == s1 then s0 else error msg_sf
-          msg_sf = "appBox: incompatible single faces" ++ show (s0, s1)
-          d2     = intersect d0 d1
-          vs2    = [(s, app (delete x d) (boxSide b0 s) (boxSide b1 s))
-                   | s@(x,dx) <- sides d2]
-
--- assumes homogeneity of the list
-listBox :: Box [t] -> [Box t]
-listBox (Box s0 d vss) =  [Box s0 d bc | bc <- bcs] where
-    bcs = transpose [[(s, v) | v <- vs] | (s, vs) <- vss]
