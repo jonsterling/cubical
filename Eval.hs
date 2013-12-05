@@ -442,7 +442,7 @@ com d (VId a v0 v1) box@(Box (Just s) _ _) =
 com d (Ter (LSum nass) e) box@(Box (Just s) _ _) =
   res (fill d (Ter (LSum nass) e) box) (face d s)
 com d (VEquivEq x d' a b f s t) box@(Box (Just si) _ _) =
-  fill d (VEquivEq x d' a b f s t) box `res` face d si
+  fill d (VEquivEq x d' a b f s t) box `res` face d (oppSide si)
 
 com d v box = Kan Com d v box
 
