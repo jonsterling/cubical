@@ -18,9 +18,16 @@ data Dir  = Up | Down
   deriving (Eq, Show)
 type Side = (Name, Dir)
 
+
+sides :: Dim -> [Side]
+sides d = concat [[(x,Up), (x,Down)] | x <- d]
+
 mirror :: Dir -> Dir
 mirror Up = Down
 mirror Down = Up
+
+oppSide :: Side -> Side
+oppSide (x, dir) = (x, mirror dir)
 
 dimeq :: Dim -> Dim -> Bool
 dimeq d d' = sort (nub d) == sort (nub d')
@@ -812,15 +819,12 @@ isOpenNBox :: NBox -> Bool
 isOpenNBox (NBox (Just _) _ _) = True
 isOpenNBox _                  = False
 
-sides :: Dim -> [Side]
-sides d = concat [[(x,Up), (x,Down)] | x <- d]
-
 toNBox :: Dim -> Dim -> Val -> NBox
-toNBox d d' v = NBox Nothing d' [(s,v `res` (face d s))| s <- sides d']
+toNBox d d' v = NBox Nothing d' [(s, v `res` face d s) | s <- sides d']
 
 openNBox :: Side -> NBox -> NBox
 openNBox s0@(x,dx) (NBox Nothing d vs)
-    | x `elem` d = NBox (Just (x, mirror dx)) (delete x d) vs'
+    | x `elem` d = NBox (Just (oppSide s0)) (delete x d) vs'
     | otherwise  = error $ "openNBox: " ++ show x ++ " not in " ++ show d
   where vs' = [(s,v) | (s,v) <- vs, s /= s0]
 openNBox _ (NBox (Just s) _ _) =
@@ -831,13 +835,8 @@ toOpenNBox d d' s = openNBox s . toNBox d d'
 
 appNBox :: Dim -> NBox -> NBox -> NBox
 appNBox d b0@(NBox s0 d0 vs0) b1@(NBox s1 d1 vs1) = NBox s2 d2 vs2
-    where s2 = case (s0, s1) of
-                 (Just s0@(x,dx), Just s1@(y,dy))
-                     | s0 == s1     -> Just s0
-                     | otherwise    -> error msg_sf
-                 (Nothing, Nothing) -> Nothing
-                 _                  -> error msg_sf
+    where s2     = if s0 == s1 then s0 else error msg_sf
           msg_sf = "appNBox: incompatible single faces" ++ show (s0, s1)
-          d2 = intersect d0 d1
-          vs2 = [(s, app (delete x d) (nboxSide b0 s) (nboxSide b1 s))
-                | s@(x,dx) <- sides d2]
+          d2     = intersect d0 d1
+          vs2    = [(s, app (delete x d) (nboxSide b0 s) (nboxSide b1 s))
+                   | s@(x,dx) <- sides d2]
