@@ -13,6 +13,9 @@ type Side = (Name, Dir)
 sides :: Dim -> [Side]
 sides d = concat [[(x,Up), (x,Down)] | x <- d]
 
+maybeSides :: Maybe Side -> Dim -> [Side]
+maybeSides s d = (case s of Just s -> [s]; Nothing -> []) ++ sides d
+
 mirror :: Dir -> Dir
 mirror Up = Down
 mirror Down = Up
@@ -28,9 +31,17 @@ data Box t = Box {
 }
   deriving (Eq, Show)
 
-mapBox :: (Side -> t -> t) -> Box t -> Box t
+mapBox :: (Side -> t -> u) -> Box t -> Box u
 mapBox f (Box ms d' vs) = Box ms d' fvs
     where fvs = [(s, f s v) | (s@(x,_), v) <- vs]
+
+map2Box :: (Side -> t -> u -> v) -> Box t -> Box u -> Box v
+map2Box f b0@(Box s0 d0 vs0) b1@(Box s1 d1 vs1) = Box s2 d2 vs2
+    where s2     = if s0 == s1 then s0 else error msg_sf
+          msg_sf = "appBox: incompatible single faces" ++ show (s0, s1)
+          d2     = intersect d0 d1
+          vs2    = [(s, f s (getSide b0 s) (getSide b1 s))
+                   | s <- maybeSides s2 d2]
 
 getSide :: Box t -> Side -> t
 getSide (Box s0 d vs) s@(x,dir) =
@@ -43,8 +54,7 @@ getSide (Box s0 d vs) s@(x,dir) =
                else error $ "getSide: side not expected " ++ show s
 
 boxSides :: Box t -> [Side]
-boxSides box@(Box s d _) =
-  (case s of Just s -> [s]; Nothing -> []) ++ sides d
+boxSides box@(Box s d _) = maybeSides s d
 
 isOpenBox :: Box t -> Bool
 isOpenBox (Box (Just _) _ _) = True
@@ -92,3 +102,8 @@ addSingleSide _ b = error $ "addSingleSide: not boundary " ++ show b
 listBox :: Box [t] -> [Box t]
 listBox (Box s0 d vss) =  [Box s0 d bc | bc <- bcs] where
     bcs = transpose [[(s, v) | v <- vs] | (s, vs) <- vss]
+
+fmapBox :: (t -> u) -> Box t -> Box u
+fmapBox f = mapBox (\_ -> f)
+
+instance Functor Box where fmap = fmapBox

@@ -63,6 +63,10 @@ f `dap` i = case f `ap` i of
   Left b -> error "dap: undefined"
   Right x -> x
 
+sap :: Mor -> Side -> Either Bool Side
+sap f (x,dir) = case f `ap` x of Right y   -> Right (y,dir)
+                                 Left dir' -> Left $ dir == dir'
+
 comp :: Mor -> Mor -> Mor -- use diagram order!
 comp f g = ([(i, (f `ap` i) >>= (g `ap`))| i <- dom f], cod g)
 
@@ -348,7 +352,7 @@ fill d (Ter (LSum nass) e) box@(Box (Just sb) db vb) =
 fill d (VEquivEq x d' a b f s t) box@(Box (Just sz@(z,dir)) dJ bc)
   | x /= z && x `notElem` dJ =
     -- d == x : d' ?!
-    let ax0  = fill d' a (mapBox (\_ -> fstVal) box)
+    let ax0  = fill d' a (fstVal <$> box)
         bx0  = app d' f ax0
         bcx1 = mapBox (\_ vy -> sndVal vy `res` face d (x,Up)) box
 --      bz   = mapBox (\_ vy -> sndVal vy) box
@@ -534,21 +538,22 @@ res (VPi a b) f = VPi (res a f) (res b f)
 res (Ter t e) f = Ter t (mapEnv (`res` f) e) -- should be the same as above
 res (VApp u v) f = app (cod f) (res u f) (res v f)
 -- res (Res v g) f = res v (g `comp` f)
+res (Kan Fill d u box@(Box (Just s@(i,dir)) d' _)) f | i `elem` ndef f =
+    case f `sap` s of
+      Left True  -> getSide box s `res` (f `minus` i)
+      Left False -> res (Kan Com d u box) (f `minus` i) -- This will be a Com
 res (Kan Fill d u box@(Box (Just s@(i,dir)) d' _)) f
-    | (f `ap` i) `direq` dir = getSide box s `res` (f `minus` i)
-    | (f `ap` i) `direq` mirror dir = res (Kan Com d u box) (f `minus` i)
-                                      -- This will be a Com
-    | ndef f /= [] = let x:_        = ndef f
-                         Left dirx  = f `ap` x
+    | ndef f /= [] = let x:_       = ndef f
+                         Left dirx = f `ap` x
                      in getSide box (x, dirx) `res` (f `minus` x)
     | (i:d') `subset` def f =  fill (cod f) (u `res` f) (box `resBox` f)
   -- otherwise?
     | otherwise = error $ "Fill: not possible? box=" ++ show box
                            ++ "f = " ++ show f ++ " d= " ++ show d
 res (Kan Com d u box@(Box (Just s@(i,dir)) d' _)) f
-    | ndef f /= [] = let  x:_        = ndef f
-                          Left dirx  = f `ap` x
-                          g          = face d s `comp` f
+    | ndef f /= [] = let  x:_     = ndef f
+                          Left dirx = f `ap` x
+                          g         = face d s `comp` f
                      in getSide box (x, dirx) `res` (g `minus` x)
     | d' `subset` def f = com co (u `res` fupd) (box `resBox` fupd)
     | otherwise = error $  "Com: not possible? box=" ++ show box
@@ -618,23 +623,17 @@ subset xs ys = all (`elem` ys) xs
 type VBox = Box Val
 
 appBox :: Dim -> VBox -> VBox -> VBox
-appBox d b0@(Box s0 d0 vs0) b1@(Box s1 d1 vs1) = Box s2 d2 vs2
-    where s2     = if s0 == s1 then s0 else error msg_sf
-          msg_sf = "appBox: incompatible single faces" ++ show (s0, s1)
-          d2     = intersect d0 d1
-          vs2    = [(s, app (delete x d) (getSide b0 s) (getSide b1 s))
-                   | s@(x,dx) <- sides d2]
+appBox d b0 b1 = map2Box (\(x,i) -> app (delete x d)) b0 b1
 
 -- assumes s0 and d are in dom f
 resBox :: VBox -> Mor -> VBox
-resBox b@(Box s0 d vs) f = Box s0' d' vs' where
+resBox b@(Box s0 d vs) f = funMkBox s0' d' (\s -> getSide b s `res` f) where
     s0' :: Maybe Side
-    s0' = do (x, dx) <- s0
-             case f `ap` x of
-               Right fx -> return (fx, dx)
+    s0' = do s0 <- s0
+             case f `sap` s0 of
+               Right s0' -> return s0'
                Left  _  -> fail ""
     d' = rights [f `ap` x | x <- d]
-    vs' = rights [(,v).(,dir) <$> f `ap` x | ((x,dir),v) <- vs]
 
 toBox :: Dim -> Dim -> Val -> VBox
 toBox d d' v = Box Nothing d' [(s, v `res` face d s) | s <- sides d']
