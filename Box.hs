@@ -32,15 +32,15 @@ mapBox :: (Side -> t -> t) -> Box t -> Box t
 mapBox f (Box ms d' vs) = Box ms d' fvs
     where fvs = [(s, f s v) | (s@(x,_), v) <- vs]
 
-boxSide :: Box t -> Side -> t
-boxSide (Box s0 d vs) s@(x,dir) =
+getSide :: Box t -> Side -> t
+getSide (Box s0 d vs) s@(x,dir) =
   case lookup s vs of
     Just v -> v
     Nothing -> if x `elem` d
-                 then error $ "boxSide: missing expected side " ++ show s
+                 then error $ "getSide: missing expected side " ++ show s
                else if Just s == s0
-                 then error $ "boxSide: missing single side " ++ show s
-               else error $ "boxSide: side not expected " ++ show s
+                 then error $ "getSide: missing single side " ++ show s
+               else error $ "getSide: side not expected " ++ show s
 
 boxSides :: Box t -> [Side]
 boxSides box@(Box s d _) =
@@ -59,9 +59,9 @@ openBox s0@(x,dx) (Box Nothing d vs)
 openBox _ (Box (Just s) _ _) =
     error $ "openBox t : already open on side " ++ show s
 
-boundaryBox :: Show t => Box t -> Box t
-boundaryBox (Box (Just _) d vs) = Box Nothing d vs
-boundaryBox b = error $ "openBox t : already a boundary " ++ show b
+boxBoundary :: Show t => Box t -> Box t
+boxBoundary (Box (Just _) d vs) = Box Nothing d vs
+boxBoundary b = error $ "openBox t : already a boundary " ++ show b
 
 
 -- TODO: rewrite mkBox using addBox t or funMkBox
@@ -73,14 +73,15 @@ mkBox sv xvvs = Box s0 d (sv0 ++ concat vvs) where
     vvs       = [ [((x,Down),vDown), ((x,Up),vUp)]
                 | (x, (vDown, vUp)) <- xvvs]
 
-addBox :: Box t -> (Name,(t, t)) -> Box t
-addBox (Box s0 d vs) (x,(vDown,vUp)) =
-    Box s0 (x:d) (((x,Down),vDown):((x,Up),vUp):vs)
 
 funMkBox :: Maybe Side -> Dim -> (Side -> t) -> Box t
 funMkBox s d f = Box s d [(s, f s) | s <- ss] where
   ss = (case s of Just s -> [s]
                   Nothing -> []) ++ (sides d)
+
+add2Sides :: (Name,(t, t)) -> Box t -> Box t
+add2Sides (x,(vDown,vUp)) (Box s0 d vs) =
+    Box s0 (x:d) (((x,Down),vDown):((x,Up),vUp):vs)
 
 addSingleSide :: Show t => (Side, t) -> Box t -> Box t
 addSingleSide (s, v) (Box Nothing d vs) = (Box (Just s) d ((s,v):vs))

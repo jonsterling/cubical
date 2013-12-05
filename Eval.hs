@@ -145,7 +145,7 @@ freeNames (VExt n d v1 v2 v3 v4) =
   [n] `union` d `union` unionsMap freeNames [v1,v2,v3,v4]
 freeNames (Kan _ d v box@(Box s0 bd _)) =
   d `union` freeNames v `union` bd `union` boxnames where
-      boxnames = unions [freeNames (boxSide box s) | s <- boxSides box]
+      boxnames = unions [freeNames (getSide box s) | s <- boxSides box]
 freeNames (VEquivEq n d v1 v2 v3 v4 v5) =
   [n] `union` d `union` unionsMap freeNames [v1,v2,v3,v4,v5]
 freeNames (VPair n v1 v2) = [n] `union` unionsMap freeNames [v1,v2]
@@ -320,7 +320,7 @@ fill :: Dim -> Val -> VBox -> Val
 fill d (VId a v0 v1) box =
 --  trace ("Id fill box = " ++ show box ++ "\ntype a= " ++ show a ++ "\n"
 --        ++ "v0 = " ++ show v0 ++ "\nv1 = " ++ show v1)
-    Path $ fill (x:d) ax $ addBox box' (x,(v0,v1))
+    Path $ fill (x:d) ax $ add2Sides (x,(v0,v1)) box'
   where x   = gensym d            -- i,d' <= d
         ax  = a `res` (deg d (x:d)) -- dim x:d
         box' = mapBox (\(j,_) v -> unPathAs (delete j d) x v) box
@@ -333,7 +333,7 @@ fill d (Ter (LSum nass) e) box@(Box (Just sb) db vb) =
            Just as -> as
            Nothing -> error $ "fill: missing constructor "
                       ++ "in labelled sum " ++ name
-    name = extractName (boxSide box sb)
+    name = extractName (getSide box sb)
     extractName (VCon n _) = n
     extractName x = error "fill VLSum: not a constructor (bottom)"
     extractArgs = (\v -> case v of
@@ -341,7 +341,7 @@ fill d (Ter (LSum nass) e) box@(Box (Just sb) db vb) =
                           VCon n _ -> error $ "fill VLSum: constructors " ++ n ++
                                " and " ++ name ++ " do not match"
                           _ -> error "fill VLSum: not a constructor (side)")
-    argboxes = listBox $ funMkBox (Just sb) db (extractArgs . boxSide box)
+    argboxes = listBox $ funMkBox (Just sb) db (extractArgs . getSide box)
     -- fill boxes for each argument position of the constructor
     ws = fills d as e argboxes
     err x = error $ "fill: not applied to constructor expressions " ++ show x
@@ -353,10 +353,10 @@ fill d (VEquivEq x d' a b f s t) box@(Box (Just sz@(z,dir)) dJ bc)
         bcx1 = mapBox (\_ vy -> sndVal vy `res` face d (x,Up)) box
 --      bz   = mapBox (\_ vy -> sndVal vy) box
         bx1  = fill d' b bcx1
-        v    = fill d (b `res` deg d' d) (addBox box (x,(bx0,bx1)))
+        v    = fill d (b `res` deg d' d) (add2Sides (x,(bx0,bx1)) box)
     in trace "VEquivEq case 1" $ VPair x ax0 v
   | x /= z && x `elem` dJ =
-    let ax0 = boxSide box (x,Down)
+    let ax0 = getSide box (x,Down)
         -- TODO: Clean
         bz  = (`mapBox` box)
               (\(ny,dy) vy -> if x /= ny then sndVal vy else
@@ -364,18 +364,18 @@ fill d (VEquivEq x d' a b f s t) box@(Box (Just sz@(z,dir)) dJ bc)
         v   = fill d (b `res` deg d' d) bz
     in trace "VEquivEq case 2" $ VPair x ax0 v
   | x == z && dir == Down =
-    let ax0 = boxSide box (x,Down)
+    let ax0 = getSide box (x,Down)
         bx0 = app d' f ax0
         v   = fill d (b `res` deg d' d) (mapBox mod box)
         mod sy v = if sy == sz then bx0 else sndVal v
     in trace "VEquivEq case 3" $ VPair x ax0 v
   | x == z && dir == Up =
     let y  = gensym d
-        b  = boxSide box sz
+        b  = getSide box sz
         sb = app d' s b
         gb = vfst sb
-        abnd   = mapBox (\sy vy -> fst (vpairToSquare sy vy)) (boundaryBox box)
-        bbnd   = mapBox (\sy vy -> snd (vpairToSquare sy vy)) (boundaryBox box)
+        abnd   = mapBox (\sy vy -> fst (vpairToSquare sy vy)) (boxBoundary box)
+        bbnd   = mapBox (\sy vy -> snd (vpairToSquare sy vy)) (boxBoundary box)
         abox   = addSingleSide ((y,Down),gb) abnd
         afill  = fill (y:d') (a `res` deg d' (y : d')) abox
         acom   = com (y:d') (a `res` deg d' (y : d')) abox
@@ -383,8 +383,8 @@ fill d (VEquivEq x d' a b f s t) box@(Box (Just sz@(z,dir)) dJ bc)
         sbsnd  = unPathAs d' x (vsnd sb)
         degb   = b `res` deg d' (y : d')
 
-        bbox = (addSingleSide ((y,Down),sbsnd)
-               (addBox bbnd (x,(fafill, degb))))
+        bbox = addSingleSide ((y,Down),sbsnd)
+               $ add2Sides (x,(fafill, degb)) bbnd
 
         bcom = com (y : d) (b `res` deg d' (y : d)) bbox
 
@@ -467,15 +467,15 @@ app d (Kan Fill bd (VPi a b) bcw@(Box (Just s@(i,dir)) d' _)) v = -- here: bd = 
         vbox = toOpenBox (x:d) d' s vfill
         bcwx = bcw `resBox` (deg d (x:d))
         wbox' = appBox (x:d) bcwx vbox
-        wuimdir = boxSide wbox' $ fromJust $ boxSingleSide wbox'
-        wbnd  = boundaryBox wbox'
+        wuimdir = getSide wbox' $ fromJust $ boxSingleSide wbox'
+        wbnd  = boxBoundary wbox'
         -- the missing faces to get a (x, i:d')-open box in x:i:d (dir)
         wux0 = fill d (app d b ufill) (appBox d bcw bcu)
         wuidir = app (x:di) (com d (VPi a b) bcw) u `res` deg di (x:di)
         -- arrange the i-direction in the right order
         wuis = if dir == Up then (wuidir,wuimdir) else (wuimdir,wuidir)
         -- final open box in (app bx vsfill)
-        wvfills = addSingleSide ((x,Up),wux0) $ addBox wbnd (i,(wuis))
+        wvfills = addSingleSide ((x,Up),wux0) $ add2Sides (i,(wuis)) wbnd
 app d (VExt x d' bv fv gv pv) w = -- d = x:d'; values in vext have dim d'
   com (y:d) (app (y:d) bvxy wy) $ mkBox (Just ((y,Up),pvxw)) [(x,(left,right))]
   -- NB: there are various choices how to construct this
@@ -535,12 +535,12 @@ res (Ter t e) f = Ter t (mapEnv (`res` f) e) -- should be the same as above
 res (VApp u v) f = app (cod f) (res u f) (res v f)
 -- res (Res v g) f = res v (g `comp` f)
 res (Kan Fill d u box@(Box (Just s@(i,dir)) d' _)) f
-    | (f `ap` i) `direq` dir = boxSide box s `res` (f `minus` i)
+    | (f `ap` i) `direq` dir = getSide box s `res` (f `minus` i)
     | (f `ap` i) `direq` mirror dir = res (Kan Com d u box) (f `minus` i)
                                       -- This will be a Com
     | ndef f /= [] = let x:_        = ndef f
                          Left dirx  = f `ap` x
-                     in boxSide box (x, dirx) `res` (f `minus` x)
+                     in getSide box (x, dirx) `res` (f `minus` x)
     | (i:d') `subset` def f =  fill (cod f) (u `res` f) (box `resBox` f)
   -- otherwise?
     | otherwise = error $ "Fill: not possible? box=" ++ show box
@@ -549,7 +549,7 @@ res (Kan Com d u box@(Box (Just s@(i,dir)) d' _)) f
     | ndef f /= [] = let  x:_        = ndef f
                           Left dirx  = f `ap` x
                           g          = face d s `comp` f
-                     in boxSide box (x, dirx) `res` (g `minus` x)
+                     in getSide box (x, dirx) `res` (g `minus` x)
     | d' `subset` def f = com co (u `res` fupd) (box `resBox` fupd)
     | otherwise = error $  "Com: not possible? box=" ++ show box
                           ++ "f = " ++ show f ++ " d= " ++ show d
@@ -622,7 +622,7 @@ appBox d b0@(Box s0 d0 vs0) b1@(Box s1 d1 vs1) = Box s2 d2 vs2
     where s2     = if s0 == s1 then s0 else error msg_sf
           msg_sf = "appBox: incompatible single faces" ++ show (s0, s1)
           d2     = intersect d0 d1
-          vs2    = [(s, app (delete x d) (boxSide b0 s) (boxSide b1 s))
+          vs2    = [(s, app (delete x d) (getSide b0 s) (getSide b1 s))
                    | s@(x,dx) <- sides d2]
 
 -- assumes s0 and d are in dom f
@@ -641,4 +641,3 @@ toBox d d' v = Box Nothing d' [(s, v `res` face d s) | s <- sides d']
 
 toOpenBox :: Dim -> Dim -> Side -> Val -> VBox
 toOpenBox d d' s = openBox s . toBox d d'
-
