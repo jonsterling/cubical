@@ -60,12 +60,12 @@ isOpenBox :: Box t -> Bool
 isOpenBox (Box (Just _) _ _) = True
 isOpenBox _                  = False
 
-
+-- openBox KEEPS face s0
 openBox :: Show t => Side -> Box t -> Box t
 openBox s0@(x,dx) (Box Nothing d vs)
-    | x `elem` d = Box (Just (oppSide s0)) (delete x d) vs'
+    | x `elem` d = Box (Just s0) (delete x d) vs'
     | otherwise  = error $ "openBox t: " ++ show x ++ " not in " ++ show d
-  where vs' = [(s,v) | (s,v) <- vs, s /= s0]
+  where vs' = [(s,v) | (s,v) <- vs, s /= (oppSide s0)]
 openBox _ (Box (Just s) _ _) =
     error $ "openBox t : already open on side " ++ show s
 
@@ -85,9 +85,7 @@ mkBox sv xvvs = Box s0 d (sv0 ++ concat vvs) where
 
 
 funMkBox :: Maybe Side -> Dim -> (Side -> t) -> Box t
-funMkBox s d f = Box s d [(s, f s) | s <- ss] where
-  ss = (case s of Just s -> [s]
-                  Nothing -> []) ++ (sides d)
+funMkBox s d f = Box s d [(s, f s) | s <- maybeSides s d]
 
 add2Sides :: (Name,(t, t)) -> Box t -> Box t
 add2Sides (x,(vDown,vUp)) (Box s0 d vs) =

@@ -370,8 +370,9 @@ fill d (VEquivEq x d' a b f s t) box@(Box (Just sz@(z,dir)) dJ bc)
   | x == z && dir == Down =
     let ax0 = getSide box (x,Down)
         bx0 = app d' f ax0
-        v   = fill d (b `res` deg d' d) (mapBox mod box)
-        mod sy v = if sy == sz then bx0 else sndVal v
+        v   = fill d (b `res` deg d' d)
+              $ addSingleSide (sz,bx0)
+              $ funMkBox Nothing dJ (sndVal . getSide box)
     in trace "VEquivEq case 3" $ VPair x ax0 v
   | x == z && dir == Up =
     let y  = gensym d
@@ -477,11 +478,12 @@ app d (Kan Fill bd (VPi a b) bcw@(Box (Just s@(i,dir)) d' _)) v = -- here: bd = 
         wux0 = fill d (app d b ufill) (appBox d bcw bcu)
         wuidir = app (x:di) (com d (VPi a b) bcw) u `res` deg di (x:di)
         -- arrange the i-direction in the right order
-        wuis = if dir == Up then (wuidir,wuimdir) else (wuimdir,wuidir)
+        wuis = if dir == Down then (wuidir,wuimdir) else (wuimdir,wuidir)
         -- final open box in (app bx vsfill)
-        wvfills = addSingleSide ((x,Up),wux0) $ add2Sides (i,(wuis)) wbnd
+        wvfills = addSingleSide ((x,Down),wux0) $ add2Sides (i,(wuis)) wbnd
 app d (VExt x d' bv fv gv pv) w = -- d = x:d'; values in vext have dim d'
-  com (y:d) (app (y:d) bvxy wy) $ mkBox (Just ((y,Up),pvxw)) [(x,(left,right))]
+  com (y:d) (app (y:d) bvxy wy)
+          $ mkBox (Just ((y,Down),pvxw)) [(x,(left,right))]
   -- NB: there are various choices how to construct this
   where y = gensym d
         bvxy = bv `res` deg d' (y:d)
@@ -551,9 +553,9 @@ res (Kan Fill d u box@(Box (Just s@(i,dir)) d' _)) f
     | otherwise = error $ "Fill: not possible? box=" ++ show box
                            ++ "f = " ++ show f ++ " d= " ++ show d
 res (Kan Com d u box@(Box (Just s@(i,dir)) d' _)) f
-    | ndef f /= [] = let  x:_     = ndef f
-                          Left dirx = f `ap` x
-                          g         = face d s `comp` f
+    | ndef f /= [] = let  x:_        = ndef f
+                          Left dirx  = f `ap` x
+                          g          = face d (oppSide s) `comp` f
                      in getSide box (x, dirx) `res` (g `minus` x)
     | d' `subset` def f = com co (u `res` fupd) (box `resBox` fupd)
     | otherwise = error $  "Com: not possible? box=" ++ show box
