@@ -784,10 +784,11 @@ data NBox = NBox {
    nboxDim        :: Dim,
    nboxMap        :: [(Side, Val)]
 }
+  deriving (Eq, Show)
 
-mapNBox :: Dim -> (Side -> Dim -> Val -> Val) -> NBox -> NBox
-mapNBox d f (NBox ms d' vs) = NBox ms d' fvs
-    where fvs = [(s, f s (delete x d) v) | (s@(x,_), v) <- vs]
+mapNBox :: (Side -> Val -> Val) -> NBox -> NBox
+mapNBox f (NBox ms d' vs) = NBox ms d' fvs
+    where fvs = [(s, f s v) | (s@(x,_), v) <- vs]
 
 nboxSide :: NBox -> Side -> Val
 nboxSide (NBox s0 d vs) s@(x,dir) =
@@ -828,6 +829,10 @@ openNBox _ (NBox (Just s) _ _) =
 toOpenNBox :: Dim -> Dim -> Side -> Val -> NBox
 toOpenNBox d d' s = openNBox s . toNBox d d'
 
+boundaryNBox :: NBox -> NBox
+boundaryNBox (NBox (Just _) d vs) = NBox Nothing d vs
+boundaryNBox b = error $ "openNBox : already a boundary " ++ show b
+
 appNBox :: Dim -> NBox -> NBox -> NBox
 appNBox d b0@(NBox s0 d0 vs0) b1@(NBox s1 d1 vs1) = NBox s2 d2 vs2
     where s2     = if s0 == s1 then s0 else error msg_sf
@@ -835,3 +840,25 @@ appNBox d b0@(NBox s0 d0 vs0) b1@(NBox s1 d1 vs1) = NBox s2 d2 vs2
           d2     = intersect d0 d1
           vs2    = [(s, app (delete x d) (nboxSide b0 s) (nboxSide b1 s))
                    | s@(x,dx) <- sides d2]
+
+-- TODO: rewrite mkBox using addNBox or funMkBox
+mkBox :: Maybe (Side,Val) -> [(Name, (Val, Val))] -> NBox
+mkBox sv xvvs = NBox s0 d (sv0 ++ concat vvs) where
+    (s0, sv0) = case sv of Just (s, v) -> (Just s, [(s, v)])
+                           Nothing     -> (Nothing, [])
+    d         = map fst xvvs
+    vvs       = [ [((x,Down),vDown), ((x,Up),vUp)]
+                | (x, (vDown, vUp)) <- xvvs]
+
+addNBox :: NBox -> (Name,(Val, Val)) -> NBox
+addNBox (NBox s0 d vs) (x,(vDown,vUp)) =
+    NBox s0 (x:d) (((x,Down),vDown):((x,Up),vUp):vs)
+
+funMkBox :: Maybe Side -> Dim -> (Side -> Val) -> NBox
+funMkBox s d f = NBox s d [(s, f s) | s <- ss] where
+  ss = (case s of Just s -> [s]
+                  Nothing -> []) ++ (sides d)
+
+addSingleSide :: (Side, Val) -> NBox -> NBox
+addSingleSide (s, v) (NBox Nothing d vs) = (NBox (Just s) d ((s,v):vs))
+addSingleSide _ b = error $ "addSingleSide: not boundary " ++ show b
