@@ -1,3 +1,10 @@
+
+
+
+
+
+eval plus two two where
+
 data N = zero | suc (n : N)
 
 

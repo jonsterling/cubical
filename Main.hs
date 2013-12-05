@@ -2,10 +2,8 @@ module Main where
 
 import Control.Monad.Trans
 import Control.Monad.Trans.Reader
-import Data.List
 import System.Environment
 import System.Console.Haskeline
-
 import Exp.Lex
 import Exp.Par
 import Exp.Skel
@@ -18,7 +16,10 @@ import Concrete
 import qualified MTT as A
 import Eval
 
-type Interpreter = InputT IO
+type Verbosity = Int
+
+defaultVerbosity :: Verbosity
+defaultVerbosity = 2
 
 defaultPrompt :: String
 defaultPrompt = "> "
@@ -26,49 +27,46 @@ defaultPrompt = "> "
 lexer :: String -> [Token]
 lexer = resolveLayout True . myLexer
 
-showTree :: (Show a, Print a) => a -> IO ()
-showTree tree = do
+
+-- TODO: fix
+putStrLnV _ = putStrLn
+
+-- TODO: fix
+showTreeV :: (Show a, Print a) => Verbosity -> a -> IO ()
+showTreeV _ tree = do
   putStrLn $ "\n[Abstract Syntax]\n\n" ++ show tree
   putStrLn $ "\n[Linearized tree]\n\n" ++ printTree tree
 
+
 unModule :: Module -> [Def]
 unModule (Module defs) = defs
+unModule (ModEval _ defs) = defs
 
-parseFiles :: [FilePath] -> IO [Def]
-parseFiles [] = return []
-parseFiles (f:fs) = do
+parseFiles :: Verbosity -> [FilePath] -> IO [Def]
+parseFiles _ [] = return []
+parseFiles v (f:fs) = do
   s <- readFile f
   let ts = lexer s
   case pModule ts of
     Bad s  -> do
       putStrLn $ "Parse Failed in file " ++ show f ++ "\n"
-      putStrLn $ "Tokens: " ++ show ts
+      putStrLnV v $ "Tokens: " ++ show ts
       putStrLn s
       return []
     Ok mod -> do
-      putStrLn $ "Parsed file " ++ show f ++ " successfully!"
-      showTree mod
-      defs <- parseFiles fs
+      putStrLnV v $ "Parsed file " ++ show f ++ " successfully!"
+      showTreeV v mod
+      defs <- parseFiles v fs
       return $ unModule mod ++ defs
 
 main :: IO ()
-main = getArgs >>= runInputT defaultSettings . runInterpreter
+main = getArgs >>= (runInputT defaultSettings . runInterpreter defaultVerbosity)
 
-getImports :: [Def] -> [String]
-getImports defs = [ n ++ ".cub" | DefImport (ImportIdent n) <- defs ]
-
---  names to import -> files already imported -> all definitions
-imports :: [String] -> [FilePath] -> [Def] -> Interpreter [Def]
-imports [] _  defs = return defs
-imports xs fs defs = do
-  newDefs <- lift $ parseFiles xs
-  let imps = getImports newDefs
-  imports (nub imps \\ fs) (fs ++ xs) (defs ++ newDefs)
-  
-runInterpreter :: [FilePath] -> Interpreter ()
-runInterpreter fs = do
+-- TODO: Spaghetti ftw!!
+runInterpreter :: Verbosity -> [FilePath] -> InputT IO ()
+runInterpreter v fs = do
   -- parse and type-check files
-  defs <- imports fs [] []
+  defs <- lift $ parseFiles v fs
   let cg = callGraph defs
   let ns = defsToNames $ concat $ concat cg
   let res = runResolver (handleMutuals cg)
@@ -89,11 +87,13 @@ runInterpreter fs = do
       case input of
         Nothing    -> outputStrLn help >> loop ns re
         Just ":q"  -> return ()
-        Just ":r"  -> runInterpreter fs
+        Just ":r"  -> runInterpreter v fs
         Just ":h"  -> outputStrLn help >> loop ns re
         Just str   -> let ts = lexer str in
           case pExp ts of
-            Bad err -> outputStrLn ("Parse error: " ++ err) >> loop ns re
+            Bad err -> -- putStrLn "\nParse Failed in file " ++ show f ++ "\n"
+                     -- putStrLnV v $ "Tokens: " ++ show ts
+                     outputStrLn ("Parse error: " ++ err) >> loop ns re
             Ok exp  ->
               case runResolver (local (insertNames ns) $ resolveExp exp) of
                 Left err   -> outputStrLn ("Resolver failed: " ++ err) >> loop ns re
@@ -112,3 +112,44 @@ help = "\nAvailable commands:\n" ++
        "  :q              quit\n" ++
        "  :r              reload\n" ++
        "  :h              display this message\n"
+
+
+--  xs <- parseFiles fs
+--  runInputT defaultSettings (loop (evalFiles xs []))
+  where
+
+-- main :: IO ()
+-- main = do
+--   (f:_) <- getArgs -- for the moment just bother about one input file
+--   s     <- readFile f
+--   let ts = myLLexer s
+--   case pModule ts of
+--     Bad s    -> do
+--       putStrLn "\nParse Failed...\n"
+--       putStrLn $ "Tokens:\n" ++ show ts
+--       putStrLn s
+--     Ok  tree -> do
+--       putStrLn "\nParse Successful!"
+--       showTree tree
+--       let g = map (\(_,y,z) -> (y,z)) $ graph (unModule tree)
+--       putStrLn $ "\nGraph:\n" ++ show g
+--       let cg = map (map (concatMap defToNames)) $ callGraph $ unModule tree
+-- --      let cg = callGraph $ unModule tree
+--       putStrLn $ "\nCall graph:\n" ++ show cg
+--       case runResolver (handleModule tree) of
+--         Left err  -> putStrLn $ "\nResolver Failed: " ++ err
+--         Right exp -> do
+--           putStrLn "\nResolver Successful!"
+--           putStrLn $ show exp ++ "\n"
+--           case A.checkExpInfer exp of
+--             Left terr -> putStrLn $ "\nType checking failed: " ++ show terr
+--             Right _   ->
+--               do putStrLn "YES!!!"
+--                  case translate exp of
+--                    Left err -> putStrLn $ "\nTranslation failed: " ++ show err
+--                    Right ter -> do
+--                      putStrLn $ "Translation: " ++ show ter
+--                      putStrLn $ "Eval: " ++ show (eval [] Empty ter)
+
+-- unModule (Module defs) = defs
+-- unModule (ModEval _ defs) = defs
