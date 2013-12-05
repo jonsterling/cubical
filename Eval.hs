@@ -1,6 +1,9 @@
+{-# LANGUAGE PatternGuards, TupleSections #-}
+
 module Eval where
 
 import Control.Arrow hiding (app)
+import Control.Applicative ((<$>))
 import Data.List
 import Data.Either
 import Data.Maybe
@@ -771,3 +774,70 @@ resBoundary d bc f = modBoundary d bc (\(j,_) v -> res v (f `minus` j))
 resBoundaryShape :: BoundaryShape -> Mor -> BoundaryShape
 resBoundaryShape (BoundaryShape d') f =
   BoundaryShape (map (f `dap`) d')
+
+
+{- New Boxing, when replacement finished, replace nbox by box -}
+data NBox = NBox {
+   nboxSingleSide :: Maybe Side,
+   nboxDim        :: Dim,
+   nboxMap        :: [(Side, Val)]
+}
+
+mapNBox :: Dim -> (Side -> Dim -> Val -> Val) -> NBox -> NBox
+mapNBox d f (NBox ms d' vs) = NBox ms d' fvs
+    where fvs = [(s, f s (delete x d) v) | (s@(x,_), v) <- vs]
+
+nboxSide :: NBox -> Side -> Val
+nboxSide (NBox s0 d vs) s@(x,dir) =
+  case lookup s vs of
+    Just v -> v
+    Nothing -> if x `elem` d
+                 then error $ "nboxSide: missing expected side " ++ show s
+               else if Just s == s0
+                 then error $ "nboxSide: missing single side " ++ show s
+               else error $ "nboxSide: side not expected " ++ show s
+
+-- assumes s0 and d are in dom f
+resNBox :: NBox -> Mor -> NBox
+resNBox b@(NBox s0 d vs) f = NBox s0' d' vs' where
+    s0' :: Maybe Side
+    s0' = do (x, dx) <- s0
+             case f `ap` x of
+               Right fx -> return (fx, dx)
+               Left  _  -> fail ""
+    d' = rights [f `ap` x | x <- d]
+    vs' = rights [(,v).(,dir) <$> f `ap` x | ((x,dir),v) <- vs]
+
+isOpenNBox :: NBox -> Bool
+isOpenNBox (NBox (Just _) _ _) = True
+isOpenNBox _                  = False
+
+sides :: Dim -> [Side]
+sides d = concat [[(x,Up), (x,Down)] | x <- d]
+
+toNBox :: Dim -> Dim -> Val -> NBox
+toNBox d d' v = NBox Nothing d' [(s,v `res` (face d s))| s <- sides d']
+
+openNBox :: Side -> NBox -> NBox
+openNBox s0@(x,dx) (NBox Nothing d vs)
+    | x `elem` d = NBox (Just (x, mirror dx)) (delete x d) vs'
+    | otherwise  = error $ "openNBox: " ++ show x ++ " not in " ++ show d
+  where vs' = [(s,v) | (s,v) <- vs, s /= s0]
+openNBox _ (NBox (Just s) _ _) =
+    error $ "openNBox : already open on side " ++ show s
+
+toOpenNBox :: Dim -> Dim -> Side -> Val -> NBox
+toOpenNBox d d' s = openNBox s . toNBox d d'
+
+appNBox :: Dim -> NBox -> NBox -> NBox
+appNBox d b0@(NBox s0 d0 vs0) b1@(NBox s1 d1 vs1) = NBox s2 d2 vs2
+    where s2 = case (s0, s1) of
+                 (Just s0@(x,dx), Just s1@(y,dy))
+                     | s0 == s1     -> Just s0
+                     | otherwise    -> error msg_sf
+                 (Nothing, Nothing) -> Nothing
+                 _                  -> error msg_sf
+          msg_sf = "appNBox: incompatible single faces" ++ show (s0, s1)
+          d2 = intersect d0 d1
+          vs2 = [(s, app (delete x d) (nboxSide b0 s) (nboxSide b1 s))
+                | s@(x,dx) <- sides d2]
