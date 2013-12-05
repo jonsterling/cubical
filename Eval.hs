@@ -101,38 +101,6 @@ minus :: Mor -> Name -> Mor
   where co' | i `elem` def f = delete (f `dap` i) co
             | otherwise = co
 
--- TODO: merge BoxShape and BoxContent ?
-data BoxShape = BoxShape {
-  missingSide :: Side,  -- missing side of the completion
-  boxDim      :: Dim   -- dimensions of the sides
-  }
-  deriving (Eq,Show)
-
-data BoxContent = BoxContent {
-  boxBottom :: Val,
-  boxSides  :: [(Val, Val)]
-  }
-  deriving (Eq,Show)
-
-boxSide :: BoxShape -> BoxContent -> Side -> Val
-boxSide (BoxShape (bx,bdir) bdim) (BoxContent b vs) (x, dir)
-  | x == bx && mirror bdir == dir = b
-  | otherwise = case findIndex (x ==) bdim of
-    Just n  -> side $ vs !! n
-    Nothing -> error "boxSide"
-  where side = if dir == Up then snd else fst
-
--- assumes the list is of odd size
-toBox :: [Val] -> BoxContent
-toBox (v:vs) = BoxContent v (pairing vs)
-  where pairing [] = []
-        pairing (v1:v2:vs) = (v1,v2):pairing vs
-        pairing _ = error "toBox: wrong box format (not odd)"
-toBox _ = error "toBox: wrong box format (empty box)"
-
-fromBox :: BoxContent -> [Val]
-fromBox (BoxContent v vs) = v:foldr (\(v1, v2) ws -> v1:v2:ws) [] vs
-
 direq :: Either Dir Name -> Dir -> Bool
 Left Down `direq` Down = True
 Left Up `direq` Up = True
@@ -154,7 +122,7 @@ data Val = VU
          | VSquash Name Dim Val Val  -- has dimension (name:dim); vals
                                      -- of dimension dim
          | VCon Ident [Val]
-         | Kan KanType Dim Val BoxShape BoxContent
+         | Kan KanType Dim Val VBox
          | VLSum [(Ident,[Val])]
          | VEquivEq Name Dim Val Val Val Val Val -- of type U of dimension name:dim
            -- VEquivEq x d a b f s t where
@@ -190,9 +158,9 @@ freeNames (VSquash n d v1 v2)    =
   [n] `union` d `union` unionsMap freeNames [v1,v2]
 freeNames (VExt n d v1 v2 v3 v4) =
   [n] `union` d `union` unionsMap freeNames [v1,v2,v3,v4]
-freeNames (Kan _ d v (BoxShape (n,_) bd) (BoxContent bbot bsides)) =
-  d `union` freeNames v `union` [n] `union` bd `union` freeNames bbot `union`
-  unions [ freeNames v1 `union` freeNames v2 | (v1,v2) <- bsides ]
+freeNames (Kan _ d v box@(Box s0 bd _)) =
+  d `union` freeNames v `union` bd `union` boxnames where
+      boxnames = unions [freeNames (boxSide box s) | s <- boxSides box]
 freeNames (VEquivEq n d v1 v2 v3 v4 v5) =
   [n] `union` d `union` unionsMap freeNames [v1,v2,v3,v4,v5]
 freeNames (VPair n v1 v2) = [n] `union` unionsMap freeNames [v1,v2]
@@ -257,27 +225,25 @@ eval d e (Refl a)  = Path $ eval d e a `res` deg d (gensym d : d)
 
 eval d e (Trans c p t) =
   case eval d e p of
-    Path pv -> com (x:d) (app (x:d) (eval (x:d) e' c) pv) box content
+    Path pv -> com (x:d) (app (x:d) (eval (x:d) e' c) pv) box
     pv -> error $ "eval: trans-case not a path value:" ++ show pv -- ??
   where x = gensym d
         e' = mapEnv (`res` deg d (x:d)) e
-        box = BoxShape (x, Up) []
-        content = BoxContent (eval d e t) []
+        box = mkBox (Just ((x,Down), eval d e t)) []
 
 eval d e (TransInv c p t) =
   case eval d e p of
-    Path pv -> com (x:d) (app (x:d) (eval (x:d) e' c) pv) box content
+    Path pv -> com (x:d) (app (x:d) (eval (x:d) e' c) pv) box
     pv -> error $ "eval: trans-case not a path value:" ++ show pv -- ??
   where x = gensym d
         e' = mapEnv (`res` deg d (x:d)) e
-        box = BoxShape (x, Down) []
-        content = BoxContent (eval d e t) []
+        box = mkBox (Just ((x,Up), eval d e t)) []
 
 -- TODO: throw out v, not needed?
 eval d e (J a u c w v p) = case eval d e p of
   Path pv ->
     --trace ("J: A: " ++ show (eval dxy exy a) ++ "\n theta:" ++ show theta ++"\n omega: " ++ show omega)
-               com dy (app dy (app dy cv omega) sigma) shape valbox
+               com dy (app dy (app dy cv omega) sigma) box
     where
       x:y:_ = gensyms d      -- pv is in x:d
       dy = y:d               -- Cyril: no need for z thanks to pathWith
@@ -288,12 +254,11 @@ eval d e (J a u c w v p) = case eval d e p of
       exy = mapEnv (`res` deg d dxy) e
       ey = mapEnv (`res` deg d dy) e
       theta = fill dxy (eval dxy exy a)
-              (BoxShape (x,Up) [y]) (BoxContent uy [(ux,pv)]) -- y:x:d
-      sigma = pathWith dy x theta                       -- y:d
+              (mkBox (Just ((x,Down), uy)) [(y,(ux,pv))]) -- y:x:d
+      sigma = pathWith dy x theta                         -- y:d
       omega = theta `res` face dxy (x,Up)                 -- y:d
       cv = eval dy ey c                                   -- y:d
-      shape = BoxShape (y,Up) []
-      valbox = BoxContent (eval d e w) []
+      box = mkBox (Just ((y,Down), eval d e w)) []
   pv -> error $ "eval: J on a non path value:" ++ show pv
 
 eval d e (JEq a u c w) = pathWith d y filled
@@ -306,14 +271,12 @@ eval d e (JEq a u c w) = pathWith d y filled
     uv = eval d e u
     ux = uv `res` deg d (x:d)
     uy = uv `res` deg d dy
-    theta = fill dxy (eval dxy exy a)
-            (BoxShape (x,Up) [y]) (BoxContent uy [(ux,ux)])
+    theta = fill dxy (eval dxy exy a) (mkBox (Just ((x,Down),uy)) [(y,(ux,ux))])
     sigma = pathWith dy x theta
     omega = theta `res` face dxy (x,Up)
     cv = eval dy ey c
-    shape = BoxShape (y,Up) []
-    valbox = BoxContent (eval d e w) []
-    filled = fill dy (app dy (app dy cv omega) sigma) shape valbox
+    box = mkBox (Just ((y,Down), eval d e w)) []
+    filled = fill dy (app dy (app dy cv omega) sigma) box
 
     -- x = gensym d
     -- dx = x:d
@@ -357,27 +320,27 @@ inhrec d' b p phi (VSquash x d a0 a1) = -- dim. of b,p,phi is x:d
         b0 = inhrec d (fc b Down) (fc p Down) (fc phi Down) a0
         b1 = inhrec d (fc b Up) (fc p Up) (fc phi Up) a1
 --        d' = delete x d
-inhrec _ b p phi (Kan ktype d (VInh a) box@(BoxShape (i,dir) d') bc) =
-  kan ktype d b box (modBox (i,dir) d' bc irec)
+inhrec _ b p phi (Kan ktype d (VInh a) box@(Box (Just (i,dir)) d' bc)) =
+  kan ktype d b (mapBox irec box)
   where  irec (j, dir) v = inhrec (delete j d) (fc b) (fc p) (fc phi) v
            where fc v = res v (face d (j, dir))
 --inhrec b p phi a = VInhRec b p phi a
 
-kan :: KanType -> Dim -> Val -> BoxShape -> BoxContent -> Val
+kan :: KanType -> Dim -> Val -> VBox -> Val
 kan Fill = fill
 kan Com  = com
 
 -- Kan filling
-fill :: Dim -> Val -> BoxShape -> BoxContent -> Val
-fill d (VId a v0 v1) box@(BoxShape (i,dir) d') bc =
+fill :: Dim -> Val -> VBox -> Val
+fill d (VId a v0 v1) box =
 --  trace ("Id fill box = " ++ show box ++ "\ntype a= " ++ show a ++ "\n"
 --        ++ "v0 = " ++ show v0 ++ "\nv1 = " ++ show v1)
-    Path $ fill (x:d) ax (BoxShape (i,dir) (x:d')) (BoxContent vx ((v0, v1):vsx))
+    Path $ fill (x:d) ax $ addBox box' (x,(v0,v1))
   where x   = gensym d            -- i,d' <= d
         ax  = a `res` (deg d (x:d)) -- dim x:d
-        BoxContent vx vsx = modBox (i, Up) d' bc
-                    (\(j,_) v -> unPathAs (delete j d) x v)
-fill d (Ter (LSum nass) e) box bcv = -- assumes cvs are constructor vals
+        box' = mapBox (\(j,_) v -> unPathAs (delete j d) x v) box
+fill d (Ter (LSum nass) e) box@(Box (Just sb) db vb) =
+-- assumes vb are constructor vals
 --  trace ("fill sum")
   VCon name ws
   where
@@ -385,66 +348,60 @@ fill d (Ter (LSum nass) e) box bcv = -- assumes cvs are constructor vals
            Just as -> as
            Nothing -> error $ "fill: missing constructor "
                       ++ "in labelled sum " ++ name
-    name = extractName bcv
-    extractName (BoxContent (VCon n _) _) = n
+    name = extractName (boxSide box sb)
+    extractName (VCon n _) = n
     extractName x = error "fill VLSum: not a constructor (bottom)"
-    extractArgs = map (\v -> case v of
+    extractArgs = (\v -> case v of
                           VCon n xs | n == name -> xs
                           VCon n _ -> error $ "fill VLSum: constructors " ++ n ++
                                " and " ++ name ++ " do not match"
-                          _ -> error "fill VLSum: not a constructor (side)"
-                      )
-    argboxes = map toBox $ transpose $ extractArgs $ fromBox bcv
+                          _ -> error "fill VLSum: not a constructor (side)")
+    argboxes = listBox $ funMkBox (Just sb) db (extractArgs . boxSide box)
     -- fill boxes for each argument position of the constructor
-    ws = fills d as e box argboxes
+    ws = fills d as e argboxes
     err x = error $ "fill: not applied to constructor expressions " ++ show x
-fill d (VEquivEq x d' a b f s t) bs@(BoxShape (z,dir) dJ) bc@(BoxContent vz vJ)
+fill d (VEquivEq x d' a b f s t) box@(Box (Just sz@(z,dir)) dJ bc)
   | x /= z && x `notElem` dJ =
     -- d == x : d' ?!
-    let ax0  = fill d' a bs (modBox (z,dir) dJ bc (\_ vy -> fstVal vy))
+    let ax0  = fill d' a (mapBox (\_ -> fstVal) box)
         bx0  = app d' f ax0
-        bcx1 = modBox (z,dir) dJ bc (\_ vy -> sndVal vy `res` face d (x,Up))
-        BoxContent bz bJ = modBox (z,dir) dJ bc (\_ vy -> sndVal vy)
-        bx1  = fill d' b bs bcx1
-        v    = fill d (b `res` deg d' d)
-                   (BoxShape (z,dir) (x : dJ)) (BoxContent bz ((bx0,bx1) : bJ))
+        bcx1 = mapBox (\_ vy -> sndVal vy `res` face d (x,Up)) box
+--      bz   = mapBox (\_ vy -> sndVal vy) box
+        bx1  = fill d' b bcx1
+        v    = fill d (b `res` deg d' d) (addBox box (x,(bx0,bx1)))
     in trace "VEquivEq case 1" $ VPair x ax0 v
   | x /= z && x `elem` dJ =
-    let ax0 = boxSide bs bc (x,Down)
+    let ax0 = boxSide box (x,Down)
         -- TODO: Clean
-        bz  = modBox (z,dir) dJ bc
+        bz  = (`mapBox` box)
               (\(ny,dy) vy -> if x /= ny then sndVal vy else
                               if dy == Down then app d' f ax0 else vy)
-        v   = fill d (b `res` deg d' d) bs bz
+        v   = fill d (b `res` deg d' d) bz
     in trace "VEquivEq case 2" $ VPair x ax0 v
-  | x == z && dir == Up =
-    let ax0 = boxSide bs bc (x,Down)
-        bx0 = app d' f ax0
-        bJ  = map (sndVal *** sndVal) vJ -- (f *** g) (x,y) = (f x, g y)
-        -- TODO: Add a layer of abstraction for that
-        v   = fill d (b `res` deg d' d) bs (BoxContent bx0 bJ)
-    in trace "VEquivEq case 3" $ VPair x ax0 v
   | x == z && dir == Down =
+    let ax0 = boxSide box (x,Down)
+        bx0 = app d' f ax0
+        v   = fill d (b `res` deg d' d) (mapBox mod box)
+        mod sy v = if sy == sz then bx0 else sndVal v
+    in trace "VEquivEq case 3" $ VPair x ax0 v
+  | x == z && dir == Up =
     let y  = gensym d
-        b  = vz
+        b  = boxSide box sz
         sb = app d' s b
         gb = vfst sb
-        BoundaryContent abnd = modBoundary d' (BoundaryContent vJ)
-                                 (\sz vz -> fst (vpairToSquare sz vz))
+        abnd   = mapBox (\sy vy -> fst (vpairToSquare sy vy)) (boundaryBox box)
+        bbnd   = mapBox (\sy vy -> snd (vpairToSquare sy vy)) (boundaryBox box)
+        abox   = addSingleSide ((y,Down),gb) abnd
+        afill  = fill (y:d') (a `res` deg d' (y : d')) abox
+        acom   = com (y:d') (a `res` deg d' (y : d')) abox
+        fafill = app (y : d') (f `res` deg d' (y : d')) afill
+        sbsnd  = unPathAs d' x (vsnd sb)
+        degb   = b `res` deg d' (y : d')
 
-        BoundaryContent bbnd = modBoundary d' (BoundaryContent vJ)
-                                 (\sz vz -> snd (vpairToSquare sz vz))
-        aboxshape = BoxShape (y,Up) d'
-        abox      = BoxContent gb abnd
-        afill     = fill (y:d') (a `res` deg d' (y : d')) aboxshape abox
-        acom      = com (y:d') (a `res` deg d' (y : d')) aboxshape abox
-        fafill    = app (y : d') (f `res` deg d' (y : d')) afill
-        sbsnd     = unPathAs d' x (vsnd sb)
-        degb      = b `res` deg d' (y : d')
+        bbox = (addSingleSide ((y,Down),sbsnd)
+               (addBox bbnd (x,(fafill, degb))))
 
-        bboxshape = BoxShape (y,Up) (x:d')
-        bbox = BoxContent sbsnd ((fafill,degb) : bbnd)
-        bcom = com (y : d) (b `res` deg d' (y : d)) bboxshape bbox
+        bcom = com (y : d) (b `res` deg d' (y : d)) bbox
 
         vpairToSigma :: Name -> Val -> Val
         vpairToSigma z (VPair _ a0 v0) =
@@ -461,7 +418,7 @@ fill d (VEquivEq x d' a b f s t) bs@(BoxShape (z,dir) dJ) bc@(BoxContent vz vJ)
 
     in trace "VEquivEq case 4" $ VPair x acom bcom
   | otherwise = error "fill EqEquiv"
-fill d v b vs = Kan Fill d v b vs
+fill d v box = Kan Fill d v box
 
 -- is this sigma?
 -- vsigma :: Val -> Val -> Val
@@ -477,74 +434,75 @@ vfst _ = error "vfst"
 vsnd (VCon "pair" [a,b]) = b
 vsnd _ = error "vsnd"
 
-fills :: Dim -> [Ter] -> Env -> BoxShape -> [BoxContent] -> [Val]
-fills _ [] _ _ []             = []
-fills d (a:as) e box (bc:bcs) = v : fills d as (Pair e v) box bcs
-  where v = fill d (eval d e a) box bc
-fills _ _ _ _ _ = error "fills: different lengths of types and values"
+fills :: Dim -> [Ter] -> Env -> [VBox] -> [Val]
+fills _ [] _ []              = []
+fills d (a:as) e (box:boxes) = v : fills d as (Pair e v) boxes
+  where v = fill d (eval d e a) box
+fills _ _ _ _ = error "fills: different lengths of types and values"
 
 -- Composition (ie., the face of fill which is created)
 -- Note that the dimension is not the dimension of the output value,
 -- but the one where the open box is specified
-com :: Dim -> Val -> BoxShape -> BoxContent -> Val
-com d (VId a v0 v1) box@(BoxShape (i,dir) d') bc =
+com :: Dim -> Val -> VBox -> Val
+com d (VId a v0 v1) box@(Box (Just s) _ _) =
 --  trace ("Id com box = " ++ show box ++ "\ntype a= " ++ show a ++ "\n"
 --        ++ "v0 = " ++ show v0 ++ "\nv1 = " ++ show v1)
-    res (fill d (VId a v0 v1) (BoxShape (i,dir) d') bc) (face d (i,dir))
+    res (fill d (VId a v0 v1) box) (face d s)
     -- face d i dir is (i=dir): d -> d-i
-com d (Ter (LSum nass) e) (BoxShape (i,dir) d') bc =
-  res (fill d (Ter (LSum nass) e) (BoxShape (i, dir) d') bc) (face d (i,dir))
-com d (VEquivEq x d' a b f s t) bs@(BoxShape (z,dir) dJ) bc =
-  fill d (VEquivEq x d' a b f s t) bs bc `res` face d (z,dir)
-com d v b bc = Kan Com d v b bc
+com d (Ter (LSum nass) e) box@(Box (Just s) _ _) =
+  res (fill d (Ter (LSum nass) e) box) (face d s)
+com d (VEquivEq x d' a b f s t) box@(Box (Just si) _ _) =
+  fill d (VEquivEq x d' a b f s t) box `res` face d si
+
+com d v box = Kan Com d v box
 
 
 app :: Dim -> Val -> Val -> Val
 app d (Ter (Lam t) e) u = eval d (Pair e u) t
-app d (Kan Com bd (VPi a b) box@(BoxShape (i,dir) d') bcw) u = -- here: bd = i:d
+app d (Kan Com bd (VPi a b) bcw@(Box (Just s@(i,dir)) d' _)) u =
+       -- here: bd = i:d
 --  trace ("Pi com box=" ++ show box ++ " \n" ++ "ufill " ++ show ufill)
-    com bd (app bd b ufill) box bcwu
-  where ufill = fill bd a (BoxShape (i,mirror dir) []) (BoxContent u [])
-        bcu = cubeToBox ufill bd box
-        bcwu = appBox bd box bcw bcu
-app d (Kan Fill bd (VPi a b) box@(BoxShape (i,dir) d') bcw) v = -- here: bd = d
-  trace ("Pi fill\n") com (x:d) (app (x:d) bx vfill) (BoxShape (x,Up) (i:d')) wvfills
+    com bd (app bd b ufill) bcwu
+  where ufill = fill bd a $ mkBox (Just (oppSide s, u)) []
+        bcu = toOpenBox bd d' s ufill
+        bcwu = appBox bd bcw bcu
+app d (Kan Fill bd (VPi a b) bcw@(Box (Just s@(i,dir)) d' _)) v = -- here: bd = d
+  trace ("Pi fill\n") com (x:d) (app (x:d) bx vfill) wvfills
   where x = gensym d            -- add a dimension
-        ax = res a (deg d (x:d))
-        bx = res b (deg d (x:d))
+        ax = a `res` deg d (x:d)
+        bx = b `res` deg d (x:d)
         di = delete i d         -- d minus i !!
-        u = res v (face d (i,dir))
-        ufill = fill d a (BoxShape (i,mirror dir) []) (BoxContent u [])
+        u = v `res` face d s
+        ufill = fill d a $ mkBox (Just (oppSide s,u)) []
         -- cut an (i,d')-open box (in dir) from ufill
-        bcu = cubeToBox ufill d box
+        bcu = toOpenBox bd d' s ufill
         ux = res u (deg di (x:di)) -- dim. x:(d-i)
         -- (i,[x])-open box in x:d (some choice on the order..) (mirror dir)
-        bcv = BoxContent ux [(ufill,v)]
-        vfill = fill (x:d) ax (BoxShape (i,mirror dir) [x]) bcv
-        vbox = cubeToBox vfill (x:d) box
-        bcwx = resBox i d' bcw (deg d (x:d))
-        BoxContent wuimdir wbox' = appBox (x:d) box bcwx vbox
+        vfill = fill (x:d) ax $ mkBox (Just (oppSide s,ux)) [(x,(ufill,v))]
+        vbox = toOpenBox (x:d) d' s vfill
+        bcwx = bcw `resBox` (deg d (x:d))
+        wbox' = appBox (x:d) bcwx vbox
+        wuimdir = boxSide wbox' $ fromJust $ boxSingleSide wbox'
+        wbnd  = boundaryBox wbox'
         -- the missing faces to get a (x, i:d')-open box in x:i:d (dir)
-        wux0 = fill d (app d b ufill) box (appBox d box bcw bcu)
-        wuidir = res (app (x:di) (com d (VPi a b) box bcw) u) (deg di (x:di))
+        wux0 = fill d (app d b ufill) (appBox d bcw bcu)
+        wuidir = app (x:di) (com d (VPi a b) bcw) u `res` deg di (x:di)
         -- arrange the i-direction in the right order
         wuis = if dir == Up then (wuidir,wuimdir) else (wuimdir,wuidir)
         -- final open box in (app bx vsfill)
-        wvfills = BoxContent wux0 (wuis:wbox')
+        wvfills = addSingleSide ((x,Up),wux0) $ addBox wbnd (i,(wuis))
 app d (VExt x d' bv fv gv pv) w = -- d = x:d'; values in vext have dim d'
-  com (y:d) (app (y:d) bvxy wy) (BoxShape (y,Up) [x]) (BoxContent pvxw [(left,right)])
+  com (y:d) (app (y:d) bvxy wy) $ mkBox (Just ((y,Up),pvxw)) [(x,(left,right))]
   -- NB: there are various choices how to construct this
   where y = gensym d
-        bvxy = res bv (deg d' (y:d))
-        wy = res w (deg d (y:d))
-        w0 = res w (face d (x,Down))
+        bvxy = bv `res` deg d' (y:d)
+        wy = w `res` deg d (y:d)
+        w0 = w `res` face d (x,Down)
         dg = deg d' (y:d')
-        left = res (app d' fv w0) dg
-        wxtoy = res w (update (identity d') x y)
-        right = app (y:d') (res gv dg) wxtoy
-        pvxw = unPath $ app d' pv w0
-               -- Cyril: this assumes x = gensym d'
-               -- unPathAs d' x $ ... would be safer
+        left = app d' fv w0 `res` dg -- y:d'
+        wxtoy = rename d' w x y
+        right = app (y:d') (gv `res` dg) wxtoy -- y:d'
+        pvxw = unPathAs d' x $ app d' pv w0 -- x:d'
 -- app d (VBranch alts e) (VCon name us) =
 --   case lookup name alts of
 --     Just t -> eval d (reverse us ++ e) t
@@ -591,38 +549,28 @@ res (VPi a b) f = VPi (res a f) (res b f)
 res (Ter t e) f = Ter t (mapEnv (`res` f) e) -- should be the same as above
 res (VApp u v) f = app (cod f) (res u f) (res v f)
 -- res (Res v g) f = res v (g `comp` f)
-res (Kan Fill d u (BoxShape (i,dir) d') (BoxContent v _)) f | (f `ap` i) `direq` mirror dir =
-  res v (f `minus` i)
-res (Kan Fill d u shape@(BoxShape (i,dir) d') bc) f | (f `ap` i) `direq` dir =
-  res (Kan Com d u shape bc) (f `minus` i) -- This will be a Com
---  com (cod f) (res u f) (resShape shape f) (resBox i d' bc f) -- (f `minus` i))
-res (Kan Fill d u bs@(BoxShape (i,dir) d') bc) f | ndef f /= [] =
-  res v (f `minus` x)
-  where x:_ = ndef f
-        Left dirx  = f `ap` x
-        v   = boxSide bs bc (x, dir)
-res (Kan Fill d u shape@(BoxShape (i,dir) d') bc) f | (i:d') `subset` def f = -- otherwise?
-  fill (cod f) (res u f)
-       (resShape shape f)
---       (BoxShape dir (f `dap` i) (map (f `dap`) d'))
-       (resBox i d' bc f)
-res (Kan Fill d u (BoxShape (i,dir) d') vs) f = error $ "Fill: not possible? i="
-                                              ++ show i ++ "d' = " ++ show d'
-                                              ++ "f = " ++ show f ++ " d= " ++ show d
-res (Kan Com d u bs@(BoxShape (i,dir) d') bc) f | ndef f /= [] =
-  res v (g `minus` x)
-  where x:_ = ndef f
-        Left dirx  = f `ap` x
-        v   = boxSide bs bc (x, dir)
-        g   = face d (i,dir) `comp` f
-res (Kan Com d u shape@(BoxShape (i,dir) d') bc) f | d' `subset` def f =
-  com co (res u fupd) (resShape shape fupd) (resBox i d' bc fupd)
-  where co = cod f
-        i' = gensym co
-        fupd = update f i i'
-res (Kan Com d u (BoxShape (dir,i) d') bc) f = error $  "Com: not possible? i="
-                                             ++ show i ++ "d' = " ++ show d'
-                                             ++ "f = " ++ show f ++ " d= " ++ show d
+res (Kan Fill d u box@(Box (Just s@(i,dir)) d' _)) f
+    | (f `ap` i) `direq` dir = boxSide box s `res` (f `minus` i)
+    | (f `ap` i) `direq` mirror dir = res (Kan Com d u box) (f `minus` i)
+                                      -- This will be a Com
+    | ndef f /= [] = let x:_        = ndef f
+                         Left dirx  = f `ap` x
+                     in boxSide box (x, dirx) `res` (f `minus` x)
+    | (i:d') `subset` def f =  fill (cod f) (u `res` f) (box `resBox` f)
+  -- otherwise?
+    | otherwise = error $ "Fill: not possible? box=" ++ show box
+                           ++ "f = " ++ show f ++ " d= " ++ show d
+res (Kan Com d u box@(Box (Just s@(i,dir)) d' _)) f
+    | ndef f /= [] = let  x:_        = ndef f
+                          Left dirx  = f `ap` x
+                          g          = face d s `comp` f
+                     in boxSide box (x, dirx) `res` (g `minus` x)
+    | d' `subset` def f = com co (u `res` fupd) (box `resBox` fupd)
+    | otherwise = error $  "Com: not possible? box=" ++ show box
+                          ++ "f = " ++ show f ++ " d= " ++ show d
+    where co = cod f
+          i' = gensym co
+          fupd = update f i i'
 -- res (Kan Com d u (BoxShape dir i d') bc) f = -- here: i:dom f = d
 --   trace "res com" (res (res (fill d u (BoxShape dir i d') bc) g) ytodir)
 --   where x = gensym d
@@ -678,131 +626,81 @@ res p f = error $ "res: " ++ show p ++ " " ++ show f
   -- res v f = Res v f
 --res _ _ = error "res: not possible?"
 
--- Takes a u and returns an open box u's given by the specified faces.
-cubeToBox :: Val -> Dim -> BoxShape -> BoxContent
-cubeToBox u d (BoxShape (i,dir) d') =
-  BoxContent (get (i,dir)) [ (get (j,Down), get (j,Up)) | j <- d']
-  where get s = res u (face d s)
 
--- Apply an open box of functions of a given shape to a corresponding
--- open box of arguments.
-appBox :: Dim -> BoxShape -> BoxContent -> BoxContent -> BoxContent
-appBox d (BoxShape (i,_) d') (BoxContent w ws) (BoxContent u us) =
-  BoxContent (get i w u) [(get j w1 u1, get j w2 u2)
-                         | ((w1, w2), (u1, u2), j) <- zip3 ws us d']
-  where get j = app (delete j d)
-
-modBox :: Side -> Dim -> BoxContent -> (Side -> Val -> Val) -> BoxContent
-modBox (i,dir) d (BoxContent v vs) f =
-  BoxContent (f (i, dir) v)
-             (zipWith (\j (v, w) -> (f (j,Down) v, f (j, Up) w)) d vs)
-
--- (box i d vs) f
--- i  = what we fill along
--- d  = dimension
--- vs = open box
-resBox :: Name -> Dim -> BoxContent -> Mor -> BoxContent
-resBox i d bc f = modBox (i,Up) d bc (\(j,_) v -> res v (f `minus` j))
--- wrong, replace Up by the direction from the shape
-
--- assumes f is defined on i:d'
-resShape :: BoxShape -> Mor -> BoxShape
-resShape (BoxShape (i,dir) d') f =
-  BoxShape (f `dap` i, dir) (map (f `dap`) d')
-
-subset :: Eq a => [a] -> [a] -> Bool
+subset       :: Eq a => [a] -> [a] -> Bool
 subset xs ys = all (`elem` ys) xs
 
-
--- Given B : A -> U such that s : (x : A) -> B x and
--- t : (x : A) (y : B x) -> Id (B x) (s x) y, we construct
--- a filling of closed empty cube (i.e., the boundary
--- of a cube) over a cube u in A.
-
-fillBoundary :: Dim -> Val -> Val -> Val -> Val -> Val -> BoundaryShape -> BoundaryContent -> Val
-fillBoundary d a b s t u bs@(BoundaryShape d') bc@(BoundaryContent vs) =
-  com xd (app xd bx ux) (BoxShape (x,Up) d') (BoxContent (app d s u) rest)
-  where x    = gensym d
-        xd   = x:d
-        bx   = b `res` deg d xd   -- TODO: can be "b"
-        ux   = u `res` deg d xd   -- can be "u"
-        tbnd = cubeToBoundary t d bs
-        tbc  = appBoundary d bs tbnd bc
-        BoundaryContent rest = modBoundary d' tbc
-                                (\(n,_) v -> unPathAs (delete n d) x v)
-
-data BoundaryShape = BoundaryShape {
-  boundaryDim  :: Dim
-  }
-  deriving (Eq,Show)
-
-data BoundaryContent = BoundaryContent {
-  boundarySides  :: [(Val, Val)]
-  }
-  deriving (Eq,Show)
-
--- assumes the list is of even size
-toBoundary :: [Val] -> BoundaryContent
-toBoundary vs = BoundaryContent (pairing vs)
-  where pairing [] = []
-        pairing (v1:v2:vs) = (v1,v2):pairing vs
-        pairing _ = error "toBoundary: wrong boundary format (not even)"
-
-fromBoundary :: BoundaryContent -> [Val]
-fromBoundary (BoundaryContent vs) = foldr (\(v1, v2) ws -> v1:v2:ws) [] vs
-
--- Takes a u and returns the boundary u's given by the specified faces.
-cubeToBoundary :: Val -> Dim -> BoundaryShape -> BoundaryContent
-cubeToBoundary u d (BoundaryShape d') =
-  BoundaryContent [ (get (j,Down), get (j, Up)) | j <- d']
-  where get s = res u (face d s)
-
--- Apply an open boundary of functions of a given shape to a corresponding
--- open boundary of arguments.
-appBoundary :: Dim -> BoundaryShape -> BoundaryContent -> BoundaryContent -> BoundaryContent
-appBoundary d (BoundaryShape d') (BoundaryContent ws) (BoundaryContent us) =
-  BoundaryContent [(get j w1 u1, get j w2 u2)
-                  | ((w1, w2), (u1, u2), j) <- zip3 ws us d']
-  where get j = app (delete j d)
-
-modBoundary :: Dim -> BoundaryContent -> (Side -> Val -> Val) -> BoundaryContent
-modBoundary d (BoundaryContent vs) f =
-  BoundaryContent (zipWith (\j (v, w) -> (f (j,Down) v, f (j,Up) w)) d vs)
-
-resBoundary :: Dim -> BoundaryContent -> Mor -> BoundaryContent
-resBoundary d bc f = modBoundary d bc (\(j,_) v -> res v (f `minus` j))
-
--- assumes f is defined on d'
-resBoundaryShape :: BoundaryShape -> Mor -> BoundaryShape
-resBoundaryShape (BoundaryShape d') f =
-  BoundaryShape (map (f `dap`) d')
-
-
-{- New Boxing, when replacement finished, replace nbox by box -}
-data NBox = NBox {
-   nboxSingleSide :: Maybe Side,
-   nboxDim        :: Dim,
-   nboxMap        :: [(Side, Val)]
+{- New Boxing -}
+data Box t = Box {
+   boxSingleSide :: Maybe Side,
+   boxDim        :: Dim,
+   boxMap        :: [(Side, t)]
 }
   deriving (Eq, Show)
 
-mapNBox :: (Side -> Val -> Val) -> NBox -> NBox
-mapNBox f (NBox ms d' vs) = NBox ms d' fvs
+mapBox :: (Side -> t -> t) -> Box t -> Box t
+mapBox f (Box ms d' vs) = Box ms d' fvs
     where fvs = [(s, f s v) | (s@(x,_), v) <- vs]
 
-nboxSide :: NBox -> Side -> Val
-nboxSide (NBox s0 d vs) s@(x,dir) =
+boxSide :: Box t -> Side -> t
+boxSide (Box s0 d vs) s@(x,dir) =
   case lookup s vs of
     Just v -> v
     Nothing -> if x `elem` d
-                 then error $ "nboxSide: missing expected side " ++ show s
+                 then error $ "boxSide: missing expected side " ++ show s
                else if Just s == s0
-                 then error $ "nboxSide: missing single side " ++ show s
-               else error $ "nboxSide: side not expected " ++ show s
+                 then error $ "boxSide: missing single side " ++ show s
+               else error $ "boxSide: side not expected " ++ show s
+
+boxSides :: Box t -> [Side]
+boxSides box@(Box s d _) =
+  (case s of Just s -> [s]; Nothing -> []) ++ sides d
+
+isOpenBox :: Box t -> Bool
+isOpenBox (Box (Just _) _ _) = True
+isOpenBox _                  = False
+
+
+openBox :: Show t => Side -> Box t -> Box t
+openBox s0@(x,dx) (Box Nothing d vs)
+    | x `elem` d = Box (Just (oppSide s0)) (delete x d) vs'
+    | otherwise  = error $ "openBox t: " ++ show x ++ " not in " ++ show d
+  where vs' = [(s,v) | (s,v) <- vs, s /= s0]
+openBox _ (Box (Just s) _ _) =
+    error $ "openBox t : already open on side " ++ show s
+
+boundaryBox :: Show t => Box t -> Box t
+boundaryBox (Box (Just _) d vs) = Box Nothing d vs
+boundaryBox b = error $ "openBox t : already a boundary " ++ show b
+
+
+-- TODO: rewrite mkBox using addBox t or funMkBox
+mkBox :: Maybe (Side,t) -> [(Name, (t, t))] -> Box t
+mkBox sv xvvs = Box s0 d (sv0 ++ concat vvs) where
+    (s0, sv0) = case sv of Just (s, v) -> (Just s, [(s, v)])
+                           Nothing     -> (Nothing, [])
+    d         = map fst xvvs
+    vvs       = [ [((x,Down),vDown), ((x,Up),vUp)]
+                | (x, (vDown, vUp)) <- xvvs]
+
+addBox :: Box t -> (Name,(t, t)) -> Box t
+addBox (Box s0 d vs) (x,(vDown,vUp)) =
+    Box s0 (x:d) (((x,Down),vDown):((x,Up),vUp):vs)
+
+funMkBox :: Maybe Side -> Dim -> (Side -> t) -> Box t
+funMkBox s d f = Box s d [(s, f s) | s <- ss] where
+  ss = (case s of Just s -> [s]
+                  Nothing -> []) ++ (sides d)
+
+addSingleSide :: Show t => (Side, t) -> Box t -> Box t
+addSingleSide (s, v) (Box Nothing d vs) = (Box (Just s) d ((s,v):vs))
+addSingleSide _ b = error $ "addSingleSide: not boundary " ++ show b
+
+type VBox = Box Val
 
 -- assumes s0 and d are in dom f
-resNBox :: NBox -> Mor -> NBox
-resNBox b@(NBox s0 d vs) f = NBox s0' d' vs' where
+resBox :: VBox -> Mor -> VBox
+resBox b@(Box s0 d vs) f = Box s0' d' vs' where
     s0' :: Maybe Side
     s0' = do (x, dx) <- s0
              case f `ap` x of
@@ -811,54 +709,21 @@ resNBox b@(NBox s0 d vs) f = NBox s0' d' vs' where
     d' = rights [f `ap` x | x <- d]
     vs' = rights [(,v).(,dir) <$> f `ap` x | ((x,dir),v) <- vs]
 
-isOpenNBox :: NBox -> Bool
-isOpenNBox (NBox (Just _) _ _) = True
-isOpenNBox _                  = False
+toBox :: Dim -> Dim -> Val -> VBox
+toBox d d' v = Box Nothing d' [(s, v `res` face d s) | s <- sides d']
 
-toNBox :: Dim -> Dim -> Val -> NBox
-toNBox d d' v = NBox Nothing d' [(s, v `res` face d s) | s <- sides d']
+toOpenBox :: Dim -> Dim -> Side -> Val -> VBox
+toOpenBox d d' s = openBox s . toBox d d'
 
-openNBox :: Side -> NBox -> NBox
-openNBox s0@(x,dx) (NBox Nothing d vs)
-    | x `elem` d = NBox (Just (oppSide s0)) (delete x d) vs'
-    | otherwise  = error $ "openNBox: " ++ show x ++ " not in " ++ show d
-  where vs' = [(s,v) | (s,v) <- vs, s /= s0]
-openNBox _ (NBox (Just s) _ _) =
-    error $ "openNBox : already open on side " ++ show s
-
-toOpenNBox :: Dim -> Dim -> Side -> Val -> NBox
-toOpenNBox d d' s = openNBox s . toNBox d d'
-
-boundaryNBox :: NBox -> NBox
-boundaryNBox (NBox (Just _) d vs) = NBox Nothing d vs
-boundaryNBox b = error $ "openNBox : already a boundary " ++ show b
-
-appNBox :: Dim -> NBox -> NBox -> NBox
-appNBox d b0@(NBox s0 d0 vs0) b1@(NBox s1 d1 vs1) = NBox s2 d2 vs2
+appBox :: Dim -> VBox -> VBox -> VBox
+appBox d b0@(Box s0 d0 vs0) b1@(Box s1 d1 vs1) = Box s2 d2 vs2
     where s2     = if s0 == s1 then s0 else error msg_sf
-          msg_sf = "appNBox: incompatible single faces" ++ show (s0, s1)
+          msg_sf = "appBox: incompatible single faces" ++ show (s0, s1)
           d2     = intersect d0 d1
-          vs2    = [(s, app (delete x d) (nboxSide b0 s) (nboxSide b1 s))
+          vs2    = [(s, app (delete x d) (boxSide b0 s) (boxSide b1 s))
                    | s@(x,dx) <- sides d2]
 
--- TODO: rewrite mkBox using addNBox or funMkBox
-mkBox :: Maybe (Side,Val) -> [(Name, (Val, Val))] -> NBox
-mkBox sv xvvs = NBox s0 d (sv0 ++ concat vvs) where
-    (s0, sv0) = case sv of Just (s, v) -> (Just s, [(s, v)])
-                           Nothing     -> (Nothing, [])
-    d         = map fst xvvs
-    vvs       = [ [((x,Down),vDown), ((x,Up),vUp)]
-                | (x, (vDown, vUp)) <- xvvs]
-
-addNBox :: NBox -> (Name,(Val, Val)) -> NBox
-addNBox (NBox s0 d vs) (x,(vDown,vUp)) =
-    NBox s0 (x:d) (((x,Down),vDown):((x,Up),vUp):vs)
-
-funMkBox :: Maybe Side -> Dim -> (Side -> Val) -> NBox
-funMkBox s d f = NBox s d [(s, f s) | s <- ss] where
-  ss = (case s of Just s -> [s]
-                  Nothing -> []) ++ (sides d)
-
-addSingleSide :: (Side, Val) -> NBox -> NBox
-addSingleSide (s, v) (NBox Nothing d vs) = (NBox (Just s) d ((s,v):vs))
-addSingleSide _ b = error $ "addSingleSide: not boundary " ++ show b
+-- assumes homogeneity of the list
+listBox :: Box [t] -> [Box t]
+listBox (Box s0 d vss) =  [Box s0 d bc | bc <- bcs] where
+    bcs = transpose [[(s, v) | v <- vs] | (s, vs) <- vss]
