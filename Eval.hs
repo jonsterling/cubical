@@ -14,10 +14,8 @@ import Core
 
 type Name = Integer
 type Dim  = [Name]
-data Dir  = Up | Down
-  deriving (Eq, Show)
+data Dir  = Up | Down deriving (Eq, Show)
 type Side = (Name, Dir)
-
 
 sides :: Dim -> [Side]
 sides d = concat [[(x,Up), (x,Down)] | x <- d]
@@ -105,8 +103,8 @@ minus :: Mor -> Name -> Mor
 
 -- TODO: merge BoxShape and BoxContent ?
 data BoxShape = BoxShape {
-  missingSide  :: Side,  -- missing side of the completion
-  boxDim  :: Dim   -- dimensions of the sides
+  missingSide :: Side,  -- missing side of the completion
+  boxDim      :: Dim   -- dimensions of the sides
   }
   deriving (Eq,Show)
 
@@ -170,6 +168,43 @@ data Val = VU
 --         | VBranch [(Ident,Val)]
 --         | VTrans Val Val Val   -- ?? needed
   deriving (Show, Eq)
+
+unions :: Eq a => [[a]] -> [a]
+unions = foldr union []
+
+unionsMap :: Eq b => (a -> [b]) -> [a] -> [b]
+unionsMap f = unions . map f
+
+freeNames :: Val -> [Name]
+freeNames VU             = []
+freeNames (Ter t e)      = freeNamesTer t `union` freeNamesEnv e
+freeNames (VId v1 v2 v3) = unionsMap freeNames [v1,v2,v3]
+freeNames (Path v)       = freeNames v
+freeNames (VInh v)       = freeNames v
+freeNames (VInc v)       = freeNames v
+freeNames (VPi v1 v2)    = unionsMap freeNames [v1,v2]
+freeNames (VApp v1 v2)   = unionsMap freeNames [v1,v2]
+freeNames (VCon _ vs)    = unionsMap freeNames vs
+freeNames (VLSum xs)     = unions [ unionsMap freeNames vs | (_,vs) <- xs ]
+freeNames (VSquash n d v1 v2)    =
+  [n] `union` d `union` unionsMap freeNames [v1,v2]
+freeNames (VExt n d v1 v2 v3 v4) =
+  [n] `union` d `union` unionsMap freeNames [v1,v2,v3,v4]
+freeNames (Kan _ d v (BoxShape (n,_) bd) (BoxContent bbot bsides)) =
+  d `union` freeNames v `union` [n] `union` bd `union` freeNames bbot `union`
+  unions [ freeNames v1 `union` freeNames v2 | (v1,v2) <- bsides ]
+freeNames (VEquivEq n d v1 v2 v3 v4 v5) =
+  [n] `union` d `union` unionsMap freeNames [v1,v2,v3,v4,v5]
+freeNames (VPair n v1 v2) = [n] `union` unionsMap freeNames [v1,v2]
+
+-- Terms do not rely on names?
+freeNamesTer :: Ter -> [Name]
+freeNamesTer _ = []
+
+freeNamesEnv :: Env -> [Name]
+freeNamesEnv Empty       = []
+freeNamesEnv (Pair e v)  = freeNamesEnv e `union` freeNames v
+freeNamesEnv (PDef ts e) = unionsMap freeNamesTer ts `union` freeNamesEnv e
 
 fstVal, sndVal :: Val -> Val
 fstVal (VPair _ a _) = a
@@ -315,7 +350,7 @@ eval d e (EquivEq a b f s t) =  -- TODO: are the dimensions of a,b,f,s,t okay?
                   (eval d e f) (eval d e s) (eval d e t)
 
 inhrec :: Dim -> Val -> Val -> Val -> Val -> Val
-inhrec d _ _ phi (VInc a) = app d phi a
+inhrec d _ _ phi (VInc a)             = app d phi a
 inhrec d' b p phi (VSquash x d a0 a1) = -- dim. of b,p,phi is x:d
   app d (app d p b0) b1                 -- d' should be x:d
   where fc w dir = res w (face (x:d) (x,dir))
@@ -330,7 +365,7 @@ inhrec _ b p phi (Kan ktype d (VInh a) box@(BoxShape (i,dir) d') bc) =
 
 kan :: KanType -> Dim -> Val -> BoxShape -> BoxContent -> Val
 kan Fill = fill
-kan Com = com
+kan Com  = com
 
 -- Kan filling
 fill :: Dim -> Val -> BoxShape -> BoxContent -> Val
@@ -385,7 +420,7 @@ fill d (VEquivEq x d' a b f s t) bs@(BoxShape (z,dir) dJ) bc@(BoxContent vz vJ)
   | x == z && dir == Up =
     let ax0 = boxSide bs bc (x,Down)
         bx0 = app d' f ax0
-        bJ  = map (\(x,y) -> (sndVal x,sndVal y)) vJ
+        bJ  = map (sndVal *** sndVal) vJ -- (f *** g) (x,y) = (f x, g y)
         -- TODO: Add a layer of abstraction for that
         v   = fill d (b `res` deg d' d) bs (BoxContent bx0 bJ)
     in trace "VEquivEq case 3" $ VPair x ax0 v
@@ -400,12 +435,12 @@ fill d (VEquivEq x d' a b f s t) bs@(BoxShape (z,dir) dJ) bc@(BoxContent vz vJ)
         BoundaryContent bbnd = modBoundary d' (BoundaryContent vJ)
                                  (\sz vz -> snd (vpairToSquare sz vz))
         aboxshape = BoxShape (y,Up) d'
-        abox  = BoxContent gb abnd
-        afill = fill (y:d') (a `res` deg d' (y : d')) aboxshape abox
-        acom  = com (y:d') (a `res` deg d' (y : d')) aboxshape abox
-        fafill = app (y : d') (f `res` deg d' (y : d')) afill
-        sbsnd = unPathAs d' x (vsnd sb)
-        degb  = b `res` deg d' (y : d')
+        abox      = BoxContent gb abnd
+        afill     = fill (y:d') (a `res` deg d' (y : d')) aboxshape abox
+        acom      = com (y:d') (a `res` deg d' (y : d')) aboxshape abox
+        fafill    = app (y : d') (f `res` deg d' (y : d')) afill
+        sbsnd     = unPathAs d' x (vsnd sb)
+        degb      = b `res` deg d' (y : d')
 
         bboxshape = BoxShape (y,Up) (x:d')
         bbox = BoxContent sbsnd ((fafill,degb) : bbnd)
@@ -428,25 +463,13 @@ fill d (VEquivEq x d' a b f s t) bs@(BoxShape (z,dir) dJ) bc@(BoxContent vz vJ)
   | otherwise = error "fill EqEquiv"
 fill d v b vs = Kan Fill d v b vs
 
-
--- Given C : B -> U such that s : (x : B) -> C x and
--- t : (x : B) (y : C x) -> Id (C x) (s x) y, we construct
--- a filling of closed empty cube (i.e., the boundary
--- of a cube) over a cube u in B.
--- C b = sigma (a : A) (Id B (f a) b)
-
--- fillBoundary :: Dim -> Val -> Val -> Val -> Val -> Val -> BoundaryShape -> BoundaryContent -> Val
--- fillBoundary d b c s t u bs@(BoundaryShape d') bc@(BoundaryContent vs) =
--- fill d (VEquivEq x d' a b f s t) bs@(BoxShape dir z dJ) bc@(BoxContent vz vJ)
-
-
 -- is this sigma?
-vsigma :: Val -> Val -> Val
-vsigma a b =
-  Ter (LSum [("pair",[Var 1,App (Var 1) (Var 0)])]) (Pair (Pair Empty a) b)
+-- vsigma :: Val -> Val -> Val
+-- vsigma a b =
+--   Ter (LSum [("pair",[Var 1,App (Var 1) (Var 0)])]) (Pair (Pair Empty a) b)
 
-vpair :: Val -> Val -> Val
-vpair a b = VCon "pair" [a,b]
+-- vpair :: Val -> Val -> Val
+-- vpair a b = VCon "pair" [a,b]
 
 vfst, vsnd :: Val -> Val
 vfst (VCon "pair" [a,b]) = a
@@ -454,10 +477,8 @@ vfst _ = error "vfst"
 vsnd (VCon "pair" [a,b]) = b
 vsnd _ = error "vsnd"
 
-
-
 fills :: Dim -> [Ter] -> Env -> BoxShape -> [BoxContent] -> [Val]
-fills _ [] _ _ [] = []
+fills _ [] _ _ []             = []
 fills d (a:as) e box (bc:bcs) = v : fills d as (Pair e v) box bcs
   where v = fill d (eval d e a) box bc
 fills _ _ _ _ _ = error "fills: different lengths of types and values"
@@ -473,21 +494,9 @@ com d (VId a v0 v1) box@(BoxShape (i,dir) d') bc =
     -- face d i dir is (i=dir): d -> d-i
 com d (Ter (LSum nass) e) (BoxShape (i,dir) d') bc =
   res (fill d (Ter (LSum nass) e) (BoxShape (i, dir) d') bc) (face d (i,dir))
--- com d (VEquivEq x d a b f s t) bs@(BoxShape dir z dJ) bc@(BoxContent vz vJ)
---   | x /= z && x `notElem` dJ =
---     let ax0  = fill d a bs (modBox dir z dJ bc (\dy ny vy -> fstVal vy))
---         bx0  = app d f ax0
---         bcx1 = modBox dir z dJ bc (\dy ny vy -> sndVal vy `res` face d x Up)
---         BoxContent bz bJ = modBox dir z dJ bc (\dy ny vy -> sndVal vy)
---         bx1  = fill d b bs bzx1
---         v    = fill (x : d) (b `res` deg d (x : d))
---                    (BoxShape dir z (x : dJ)) (BoxContent bz ((bx0,bx1) : bJ))
---     in VPair x ax0 v
 com d (VEquivEq x d' a b f s t) bs@(BoxShape (z,dir) dJ) bc =
   fill d (VEquivEq x d' a b f s t) bs bc `res` face d (z,dir)
-
 com d v b bc = Kan Com d v b bc
-
 
 
 app :: Dim -> Val -> Val -> Val
@@ -554,7 +563,7 @@ app d (Ter (Branch nvs) e) (VCon name us) =
 app d u v = VApp u v            -- error ?
 
 apps :: Dim -> Val -> [Val] -> Val
-apps d v [] = v
+apps d v []     = v
 apps d v (u:us) = apps d (app d v u) us
 -- TODO: rewrite as foldl(?r) (app d) v
 
@@ -721,20 +730,6 @@ fillBoundary d a b s t u bs@(BoundaryShape d') bc@(BoundaryContent vs) =
         tbc  = appBoundary d bs tbnd bc
         BoundaryContent rest = modBoundary d' tbc
                                 (\(n,_) v -> unPathAs (delete n d) x v)
-
--- fillBoundary :: Dim -> Val -> Val -> Val -> Val -> Val -> BoundaryShape -> BoundaryContent -> Val
--- fillBoundary d a b s t u bs@(BoundaryShape d') bc@(BoundaryContent vs) =
---   com xd (app xd bx ux) (BoxShape Up x d') (BoxContent (app d s u) rest)
---   where x    = gensym d
---         xd   = x:d
---         bx   = b `res` deg d xd   -- TODO: can be "b"
---         ux   = u `res` deg d xd   -- can be "u"
---         tbnd = cubeToBoundary t d bs
---         tbc  = appBoundary d bs tbnd bc
---         BoundaryContent rest = modBoundary d' tbc
---                                 (\ _ n v -> let nd = delete n d in
---                                   unPath v `res` update (identity nd) (gensym nd) x)
-
 
 data BoundaryShape = BoundaryShape {
   boundaryDim  :: Dim
