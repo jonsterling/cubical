@@ -437,10 +437,10 @@ com :: Dim -> Val -> VBox -> Val
 com d (VId a v0 v1) box@(Box (Just s) _ _) =
 --  trace ("Id com box = " ++ show box ++ "\ntype a= " ++ show a ++ "\n"
 --        ++ "v0 = " ++ show v0 ++ "\nv1 = " ++ show v1)
-    res (fill d (VId a v0 v1) box) (face d s)
+    res (fill d (VId a v0 v1) box) (face d (oppSide s))
     -- face d i dir is (i=dir): d -> d-i
 com d (Ter (LSum nass) e) box@(Box (Just s) _ _) =
-  res (fill d (Ter (LSum nass) e) box) (face d s)
+  res (fill d (Ter (LSum nass) e) box) (face d (oppSide s))
 com d (VEquivEq x d' a b f s t) box@(Box (Just si) _ _) =
   fill d (VEquivEq x d' a b f s t) box `res` face d (oppSide si)
 
